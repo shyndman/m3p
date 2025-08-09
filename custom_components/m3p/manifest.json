@@ -1,0 +1,19 @@
+{
+  "domain": "m3p",
+  "name": "Mellow MQTT Media Player",
+  "codeowners": [
+    "@shyndman"
+  ],
+  "version": "0.0.0",
+  "documentation": "https://github.com/shyndman/m3p",
+  "issue_tracker": "https://github.com/shyndman/m3p/issues",
+  "requirements": [],
+  "config_flow": true,
+  "iot_class": "cloud_push",
+  "dependencies": [
+    "mqtt"
+  ],
+  "mqtt": [
+    "homeassistant/media_player/+/+/config"
+  ]
+}
