@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 import voluptuous as vol
 from homeassistant.components import media_player
@@ -54,6 +55,9 @@ from custom_components.m3p.const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# Pattern to detect image data URIs
+DATA_URI_IMAGE_PATTERN = re.compile(r'^data:image/[^;]+;base64')
 
 
 PLATFORM_SCHEMA_MODERN = MQTT_RO_SCHEMA.extend(
@@ -184,6 +188,12 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
         if isinstance(payload, memoryview):
             return payload.tobytes().decode("utf-8")
         return str(payload)
+    
+    def _is_data_uri_image(self, url: str | None) -> bool:
+        """Check if URL is an image data URI."""
+        if not url:
+            return False
+        return DATA_URI_IMAGE_PATTERN.match(url) is not None
 
     @callback
     def _prepare_subscribe_topics(self) -> None:
@@ -369,7 +379,14 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
         def media_image_url_received(msg: ReceiveMessage) -> None:
             """Handle new MQTT media image url messages."""
             _LOGGER.debug("🖼️ IMAGE URL MESSAGE RECEIVED on topic %s: %s", msg.topic, msg.payload)
-            self._attr_media_image_url = self._decode_payload(msg.payload)
+            image_url = self._decode_payload(msg.payload)
+            self._attr_media_image_url = image_url
+            
+            # Auto-detect data URIs and mark them as remotely accessible
+            if self._is_data_uri_image(image_url):
+                self._attr_media_image_remotely_accessible = True
+                _LOGGER.debug("📊 Detected data URI image, setting remotely_accessible=True")
+            
             self.async_write_ha_state()
             _LOGGER.debug("✅ Media image URL updated to: %s", self._attr_media_image_url)
 
