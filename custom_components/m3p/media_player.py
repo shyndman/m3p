@@ -137,25 +137,35 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
             "MqttMediaPlayer _setup_from_config called with config: %s", config
         )
         features = MediaPlayerEntityFeature(0)
+        feature_topics = []
+        
         if self._config.get(CONF_PLAY_TOPIC):
             features |= MediaPlayerEntityFeature.PLAY
+            feature_topics.append("PLAY")
         if self._config.get(CONF_PAUSE_TOPIC):
             features |= MediaPlayerEntityFeature.PAUSE
+            feature_topics.append("PAUSE")
         if self._config.get(CONF_STOP_TOPIC):
             features |= MediaPlayerEntityFeature.STOP
+            feature_topics.append("STOP")
         if self._config.get(CONF_PREVIOUS_TRACK_TOPIC):
             features |= MediaPlayerEntityFeature.PREVIOUS_TRACK
+            feature_topics.append("PREVIOUS_TRACK")
         if self._config.get(CONF_NEXT_TRACK_TOPIC):
             features |= MediaPlayerEntityFeature.NEXT_TRACK
+            feature_topics.append("NEXT_TRACK")
         if self._config.get(CONF_SEEK_TOPIC):
             features |= MediaPlayerEntityFeature.SEEK
+            feature_topics.append("SEEK")
         if self._config.get(CONF_VOLUME_SET_TOPIC):
             features |= MediaPlayerEntityFeature.VOLUME_SET
+            feature_topics.append("VOLUME_SET")
         if self._config.get(CONF_VOLUME_MUTE_TOPIC):
             features |= MediaPlayerEntityFeature.VOLUME_MUTE
+            feature_topics.append("VOLUME_MUTE")
 
         self._attr_supported_features = features
-        _LOGGER.debug("MqttMediaPlayer setup completed with features: %s", features)
+        _LOGGER.debug("MqttMediaPlayer setup completed with features: %s (%s)", features, ", ".join(feature_topics))
 
     async def async_added_to_hass(self) -> None:
         """Called when entity is added to hass."""
@@ -436,35 +446,77 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
         async_subscribe_topics_internal(self.hass, self._sub_state)
         _LOGGER.debug("✅ MQTT subscription completed for entity: %s", self.entity_id)
 
-    async def async_play(self) -> None:
+    async def async_media_play(self) -> None:
         """Send a play command to the media player."""
-        await self.async_publish(self._config[CONF_PLAY_TOPIC], "")
+        topic = self._config.get(CONF_PLAY_TOPIC)
+        if not topic:
+            _LOGGER.warning("Play command called but no play topic configured")
+            return
+        _LOGGER.debug("🎵 Sending PLAY command to topic: %s", topic)
+        await self.async_publish(topic, "")
 
-    async def async_pause(self) -> None:
+    async def async_media_pause(self) -> None:
         """Send a pause command to the media player."""
-        await self.async_publish(self._config[CONF_PAUSE_TOPIC], "")
+        topic = self._config.get(CONF_PAUSE_TOPIC)
+        if not topic:
+            _LOGGER.warning("Pause command called but no pause topic configured")
+            return
+        _LOGGER.debug("⏸️ Sending PAUSE command to topic: %s", topic)
+        await self.async_publish(topic, "")
 
-    async def async_stop(self) -> None:
+    async def async_media_stop(self) -> None:
         """Send a stop command to the media player."""
-        await self.async_publish(self._config[CONF_STOP_TOPIC], "")
+        topic = self._config.get(CONF_STOP_TOPIC)
+        if not topic:
+            _LOGGER.warning("Stop command called but no stop topic configured")
+            return
+        _LOGGER.debug("⏹️ Sending STOP command to topic: %s", topic)
+        await self.async_publish(topic, "")
 
-    async def async_next_track(self) -> None:
+    async def async_media_next_track(self) -> None:
         """Send a next track command to the media player."""
-        await self.async_publish(self._config[CONF_NEXT_TRACK_TOPIC], "")
+        topic = self._config.get(CONF_NEXT_TRACK_TOPIC)
+        if not topic:
+            _LOGGER.warning("Next track command called but no next track topic configured")
+            return
+        _LOGGER.debug("⏭️ Sending NEXT TRACK command to topic: %s", topic)
+        await self.async_publish(topic, "")
 
-    async def async_previous_track(self) -> None:
+    async def async_media_previous_track(self) -> None:
         """Send a previous track command to the media player."""
-        await self.async_publish(self._config[CONF_PREVIOUS_TRACK_TOPIC], "")
+        topic = self._config.get(CONF_PREVIOUS_TRACK_TOPIC)
+        if not topic:
+            _LOGGER.warning("Previous track command called but no previous track topic configured")
+            return
+        _LOGGER.debug("⏮️ Sending PREVIOUS TRACK command to topic: %s", topic)
+        await self.async_publish(topic, "")
 
     async def async_set_volume_level(self, volume: float) -> None:
         """Send a set volume level command to the media player."""
-        await self.async_publish(self._config[CONF_VOLUME_SET_TOPIC], str(volume))
+        topic = self._config.get(CONF_VOLUME_SET_TOPIC)
+        if not topic:
+            _LOGGER.warning("Set volume level command called but no volume set topic configured")
+            return
+        payload = str(volume)
+        _LOGGER.debug("🔊 Sending SET VOLUME LEVEL command to topic: %s, payload: %s", topic, payload)
+        await self.async_publish(topic, payload)
 
     async def async_mute_volume(self, mute: bool) -> None:
         """Send a mute volume command to the media player."""
+        topic = self._config.get(CONF_VOLUME_MUTE_TOPIC)
+        if not topic:
+            _LOGGER.warning("Mute volume command called but no volume mute topic configured")
+            return
         payload = "true" if mute else "false"
-        await self.async_publish(self._config[CONF_VOLUME_MUTE_TOPIC], payload)
+        _LOGGER.debug("🔇 Sending MUTE VOLUME command to topic: %s, payload: %s", topic, payload)
+        await self.async_publish(topic, payload)
 
-    async def async_seek(self, position: float) -> None:
+    async def async_media_seek(self, position: float) -> None:
         """Send a seek command to the media player."""
-        await self.async_publish(self._config[CONF_SEEK_TOPIC], str(position))
+        topic = self._config.get(CONF_SEEK_TOPIC)
+        if not topic:
+            _LOGGER.warning("Seek command called but no seek topic configured")
+            return
+        payload = str(position)
+        _LOGGER.debug("⏩ Sending SEEK command to topic: %s, payload: %s", topic, payload)
+        await self.async_publish(topic, payload)
