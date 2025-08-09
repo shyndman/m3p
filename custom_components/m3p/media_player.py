@@ -136,9 +136,16 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
         _LOGGER.debug(
             "MqttMediaPlayer _setup_from_config called with config: %s", config
         )
+
+        # Store previous features if they exist (for change detection)
+        previous_features = None
+        if hasattr(self, "_attr_supported_features"):
+            previous_features = self._attr_supported_features
+
+        # Calculate new features
         features = MediaPlayerEntityFeature(0)
         feature_topics = []
-        
+
         if self._config.get(CONF_PLAY_TOPIC):
             features |= MediaPlayerEntityFeature.PLAY
             feature_topics.append("PLAY")
@@ -160,12 +167,29 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
         if self._config.get(CONF_VOLUME_SET_TOPIC):
             features |= MediaPlayerEntityFeature.VOLUME_SET
             feature_topics.append("VOLUME_SET")
+            feature_topics.append("VOLUME_STEP")
         if self._config.get(CONF_VOLUME_MUTE_TOPIC):
             features |= MediaPlayerEntityFeature.VOLUME_MUTE
             feature_topics.append("VOLUME_MUTE")
 
+        # Check if features have changed
+        if previous_features is not None and previous_features != features:
+            _LOGGER.info(
+                "🔄 Features changed for %s: %s",
+                self.entity_id if hasattr(self, "entity_id") else "entity",
+                ", ".join(feature_topics) if feature_topics else "none",
+            )
+
+            # Invalidate the cached property to force recalculation
+            if hasattr(self, "supported_features"):
+                delattr(self, "supported_features")
+
         self._attr_supported_features = features
-        _LOGGER.debug("MqttMediaPlayer setup completed with features: %s (%s)", features, ", ".join(feature_topics))
+        _LOGGER.debug(
+            "MqttMediaPlayer setup completed with features: %s (%s)",
+            features,
+            ", ".join(feature_topics),
+        )
 
     async def async_added_to_hass(self) -> None:
         """Called when entity is added to hass."""
