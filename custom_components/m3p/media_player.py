@@ -57,7 +57,7 @@ from custom_components.m3p.const import (
 _LOGGER = logging.getLogger(__name__)
 
 # Pattern to detect image data URIs
-DATA_URI_IMAGE_PATTERN = re.compile(r'^data:image/[^;]+;base64')
+DATA_URI_IMAGE_PATTERN = re.compile(r"^data:image/[^;]+;base64")
 
 
 PLATFORM_SCHEMA_MODERN = MQTT_RO_SCHEMA.extend(
