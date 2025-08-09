@@ -11,9 +11,6 @@
   "documentation": "https://github.com/shyndman/m3p",
   "iot_class": "cloud_push",
   "issue_tracker": "https://github.com/shyndman/m3p/issues",
-  "mqtt": [
-    "homeassistant/media_player/+/+/config"
-  ],
   "requirements": [],
   "version": "0.0.0"
 }
