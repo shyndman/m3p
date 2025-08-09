@@ -1,6 +1,5 @@
 # https://www.home-assistant.io/integrations/default_config/
 default_config:
-  go2rtc: false
 
 # https://www.home-assistant.io/integrations/homeassistant/
 homeassistant:
@@ -8,7 +7,7 @@ homeassistant:
 
 # https://www.home-assistant.io/integrations/logger/
 logger:
-  default: debug
+  default: info
   logs:
     mqtt: debug
     custom_components.m3p: debug
