@@ -222,12 +222,27 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
         if isinstance(payload, memoryview):
             return payload.tobytes().decode("utf-8")
         return str(payload)
-    
+
     def _is_data_uri_image(self, url: str | None) -> bool:
         """Check if URL is an image data URI."""
         if not url:
             return False
         return DATA_URI_IMAGE_PATTERN.match(url) is not None
+
+    def _truncate_url_for_logging(self, url: str | None, max_length: int = 100) -> str:
+        """Truncate URL for safe logging, especially for data URIs."""
+        if not url:
+            return "None"
+        if len(url) <= max_length:
+            return url
+        # For data URIs, show the prefix and indicate truncation
+        if self._is_data_uri_image(url):
+            prefix_match = DATA_URI_IMAGE_PATTERN.match(url)
+            if prefix_match:
+                prefix = prefix_match.group(0)  # e.g., "data:image/png;base64"
+                return f"{prefix}...[truncated {len(url)} chars total]"
+        # For regular URLs, just truncate
+        return f"{url[:max_length]}...[truncated {len(url)} chars total]"
 
     @callback
     def _prepare_subscribe_topics(self) -> None:
@@ -237,20 +252,23 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
             self.entity_id,
         )
         _LOGGER.debug("Config keys available: %s", list(self._config.keys()))
-        
+
         # Log all available topics from config
         all_topic_configs = [
             (CONF_STATE_TOPIC, "state"),
-            (CONF_VOLUME_LEVEL_TOPIC, "volume_level"), 
+            (CONF_VOLUME_LEVEL_TOPIC, "volume_level"),
             (CONF_MEDIA_TITLE_TOPIC, "media_title"),
             (CONF_MEDIA_ARTIST_TOPIC, "media_artist"),
             (CONF_MEDIA_ALBUM_NAME_TOPIC, "media_album"),
             (CONF_MEDIA_DURATION_TOPIC, "media_duration"),
             (CONF_MEDIA_POSITION_TOPIC, "media_position"),
             (CONF_MEDIA_IMAGE_URL_TOPIC, "media_image_url"),
-            (CONF_MEDIA_IMAGE_REMOTELY_ACCESSIBLE_TOPIC, "media_image_remotely_accessible"),
+            (
+                CONF_MEDIA_IMAGE_REMOTELY_ACCESSIBLE_TOPIC,
+                "media_image_remotely_accessible",
+            ),
         ]
-        
+
         _LOGGER.debug("=== ALL TOPIC CONFIGURATIONS ===")
         for topic_key, topic_name in all_topic_configs:
             topic_value = self._config.get(topic_key)
@@ -260,7 +278,9 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
         @callback
         def state_message_received(msg: ReceiveMessage) -> None:
             """Handle new MQTT state messages."""
-            _LOGGER.debug("🔥 STATE MESSAGE RECEIVED on topic %s: %s", msg.topic, msg.payload)
+            _LOGGER.debug(
+                "🔥 STATE MESSAGE RECEIVED on topic %s: %s", msg.topic, msg.payload
+            )
             try:
                 state_str = self._decode_payload(msg.payload)
                 if state_str:
@@ -273,7 +293,9 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
         state_topic = self._config.get(CONF_STATE_TOPIC)
         _LOGGER.debug("📡 SUBSCRIBING TO STATE TOPIC: %s", state_topic)
         if state_topic:
-            success = self.add_subscription(CONF_STATE_TOPIC, state_message_received, {"_attr_state"})
+            success = self.add_subscription(
+                CONF_STATE_TOPIC, state_message_received, {"_attr_state"}
+            )
             assert success, f"Failed to subscribe to state topic: {state_topic}"
         else:
             _LOGGER.debug("❌ No state topic configured, skipping state subscription")
@@ -281,7 +303,9 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
         @callback
         def volume_level_received(msg: ReceiveMessage) -> None:
             """Handle new MQTT volume level messages."""
-            _LOGGER.debug("🔊 VOLUME MESSAGE RECEIVED on topic %s: %s", msg.topic, msg.payload)
+            _LOGGER.debug(
+                "🔊 VOLUME MESSAGE RECEIVED on topic %s: %s", msg.topic, msg.payload
+            )
             try:
                 payload_str = self._decode_payload(msg.payload)
                 if payload_str:
@@ -306,7 +330,9 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
         @callback
         def media_title_received(msg: ReceiveMessage) -> None:
             """Handle new MQTT media title messages."""
-            _LOGGER.debug("🎵 TITLE MESSAGE RECEIVED on topic %s: %s", msg.topic, msg.payload)
+            _LOGGER.debug(
+                "🎵 TITLE MESSAGE RECEIVED on topic %s: %s", msg.topic, msg.payload
+            )
             self._attr_media_title = self._decode_payload(msg.payload)
             self.async_write_ha_state()
             _LOGGER.debug("✅ Media title updated to: %s", self._attr_media_title)
@@ -324,7 +350,9 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
         @callback
         def media_artist_received(msg: ReceiveMessage) -> None:
             """Handle new MQTT media artist messages."""
-            _LOGGER.debug("🎤 ARTIST MESSAGE RECEIVED on topic %s: %s", msg.topic, msg.payload)
+            _LOGGER.debug(
+                "🎤 ARTIST MESSAGE RECEIVED on topic %s: %s", msg.topic, msg.payload
+            )
             self._attr_media_artist = self._decode_payload(msg.payload)
             self.async_write_ha_state()
             _LOGGER.debug("✅ Media artist updated to: %s", self._attr_media_artist)
@@ -342,7 +370,9 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
         @callback
         def media_album_name_received(msg: ReceiveMessage) -> None:
             """Handle new MQTT media album name messages."""
-            _LOGGER.debug("💿 ALBUM MESSAGE RECEIVED on topic %s: %s", msg.topic, msg.payload)
+            _LOGGER.debug(
+                "💿 ALBUM MESSAGE RECEIVED on topic %s: %s", msg.topic, msg.payload
+            )
             self._attr_media_album_name = self._decode_payload(msg.payload)
             self.async_write_ha_state()
             _LOGGER.debug("✅ Media album updated to: %s", self._attr_media_album_name)
@@ -362,13 +392,17 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
         @callback
         def media_duration_received(msg: ReceiveMessage) -> None:
             """Handle new MQTT media duration messages."""
-            _LOGGER.debug("⏱️ DURATION MESSAGE RECEIVED on topic %s: %s", msg.topic, msg.payload)
+            _LOGGER.debug(
+                "⏱️ DURATION MESSAGE RECEIVED on topic %s: %s", msg.topic, msg.payload
+            )
             try:
                 payload_str = self._decode_payload(msg.payload)
                 if payload_str:
                     self._attr_media_duration = int(payload_str)
                     self.async_write_ha_state()
-                    _LOGGER.debug("✅ Media duration updated to: %s", self._attr_media_duration)
+                    _LOGGER.debug(
+                        "✅ Media duration updated to: %s", self._attr_media_duration
+                    )
             except (ValueError, TypeError) as e:
                 _LOGGER.warning(
                     "Invalid media duration received: %s, error: %s", msg.payload, e
@@ -378,22 +412,30 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
         _LOGGER.debug("📡 SUBSCRIBING TO DURATION TOPIC: %s", duration_topic)
         if duration_topic:
             success = self.add_subscription(
-                CONF_MEDIA_DURATION_TOPIC, media_duration_received, {"_attr_media_duration"}
+                CONF_MEDIA_DURATION_TOPIC,
+                media_duration_received,
+                {"_attr_media_duration"},
             )
             assert success, f"Failed to subscribe to duration topic: {duration_topic}"
         else:
-            _LOGGER.debug("❌ No duration topic configured, skipping duration subscription")
+            _LOGGER.debug(
+                "❌ No duration topic configured, skipping duration subscription"
+            )
 
         @callback
         def media_position_received(msg: ReceiveMessage) -> None:
             """Handle new MQTT media position messages."""
-            _LOGGER.debug("⏲️ POSITION MESSAGE RECEIVED on topic %s: %s", msg.topic, msg.payload)
+            _LOGGER.debug(
+                "⏲️ POSITION MESSAGE RECEIVED on topic %s: %s", msg.topic, msg.payload
+            )
             try:
                 payload_str = self._decode_payload(msg.payload)
                 if payload_str:
                     self._attr_media_position = int(payload_str)
                     self.async_write_ha_state()
-                    _LOGGER.debug("✅ Media position updated to: %s", self._attr_media_position)
+                    _LOGGER.debug(
+                        "✅ Media position updated to: %s", self._attr_media_position
+                    )
             except (ValueError, TypeError) as e:
                 _LOGGER.warning(
                     "Invalid media position received: %s, error: %s", msg.payload, e
@@ -403,26 +445,40 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
         _LOGGER.debug("📡 SUBSCRIBING TO POSITION TOPIC: %s", position_topic)
         if position_topic:
             success = self.add_subscription(
-                CONF_MEDIA_POSITION_TOPIC, media_position_received, {"_attr_media_position"}
+                CONF_MEDIA_POSITION_TOPIC,
+                media_position_received,
+                {"_attr_media_position"},
             )
             assert success, f"Failed to subscribe to position topic: {position_topic}"
         else:
-            _LOGGER.debug("❌ No position topic configured, skipping position subscription")
+            _LOGGER.debug(
+                "❌ No position topic configured, skipping position subscription"
+            )
 
         @callback
         def media_image_url_received(msg: ReceiveMessage) -> None:
             """Handle new MQTT media image url messages."""
-            _LOGGER.debug("🖼️ IMAGE URL MESSAGE RECEIVED on topic %s: %s", msg.topic, msg.payload)
+            payload_for_log = self._truncate_url_for_logging(
+                self._decode_payload(msg.payload)
+            )
+            _LOGGER.debug(
+                "🖼️ IMAGE URL MESSAGE RECEIVED on topic %s: %s",
+                msg.topic,
+                payload_for_log,
+            )
             image_url = self._decode_payload(msg.payload)
             self._attr_media_image_url = image_url
-            
+
             # Auto-detect data URIs and mark them as remotely accessible
             if self._is_data_uri_image(image_url):
                 self._attr_media_image_remotely_accessible = True
-                _LOGGER.debug("📊 Detected data URI image, setting remotely_accessible=True")
-            
+                _LOGGER.debug(
+                    "📊 Detected data URI image, setting remotely_accessible=True"
+                )
+
             self.async_write_ha_state()
-            _LOGGER.debug("✅ Media image URL updated to: %s", self._attr_media_image_url)
+            url_for_log = self._truncate_url_for_logging(self._attr_media_image_url)
+            _LOGGER.debug("✅ Media image URL updated to: %s", url_for_log)
 
         image_url_topic = self._config.get(CONF_MEDIA_IMAGE_URL_TOPIC)
         _LOGGER.debug("📡 SUBSCRIBING TO IMAGE URL TOPIC: %s", image_url_topic)
@@ -434,39 +490,70 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
             )
             assert success, f"Failed to subscribe to image URL topic: {image_url_topic}"
         else:
-            _LOGGER.debug("❌ No image URL topic configured, skipping image URL subscription")
+            _LOGGER.debug(
+                "❌ No image URL topic configured, skipping image URL subscription"
+            )
 
         @callback
         def media_image_remotely_accessible_received(msg: ReceiveMessage) -> None:
             """Handle new MQTT media image remotely accessible messages."""
-            _LOGGER.debug("🌐 IMAGE REMOTELY ACCESSIBLE MESSAGE RECEIVED on topic %s: %s", msg.topic, msg.payload)
+            _LOGGER.debug(
+                "🌐 IMAGE REMOTELY ACCESSIBLE MESSAGE RECEIVED on topic %s: %s",
+                msg.topic,
+                msg.payload,
+            )
             payload_str = self._decode_payload(msg.payload)
             # Convert string payload to boolean
             if payload_str is not None:
-                self._attr_media_image_remotely_accessible = payload_str.lower() in ('true', '1', 'yes', 'on')
+                self._attr_media_image_remotely_accessible = payload_str.lower() in (
+                    "true",
+                    "1",
+                    "yes",
+                    "on",
+                )
                 self.async_write_ha_state()
-                _LOGGER.debug("✅ Media image remotely accessible updated to: %s", self._attr_media_image_remotely_accessible)
+                _LOGGER.debug(
+                    "✅ Media image remotely accessible updated to: %s",
+                    self._attr_media_image_remotely_accessible,
+                )
 
-        image_accessible_topic = self._config.get(CONF_MEDIA_IMAGE_REMOTELY_ACCESSIBLE_TOPIC)
-        _LOGGER.debug("📡 SUBSCRIBING TO IMAGE REMOTELY ACCESSIBLE TOPIC: %s", image_accessible_topic)
+        image_accessible_topic = self._config.get(
+            CONF_MEDIA_IMAGE_REMOTELY_ACCESSIBLE_TOPIC
+        )
+        _LOGGER.debug(
+            "📡 SUBSCRIBING TO IMAGE REMOTELY ACCESSIBLE TOPIC: %s",
+            image_accessible_topic,
+        )
         if image_accessible_topic:
             success = self.add_subscription(
                 CONF_MEDIA_IMAGE_REMOTELY_ACCESSIBLE_TOPIC,
                 media_image_remotely_accessible_received,
                 {"_attr_media_image_remotely_accessible"},
             )
-            assert success, f"Failed to subscribe to image accessible topic: {image_accessible_topic}"
+            assert success, (
+                f"Failed to subscribe to image accessible topic: {image_accessible_topic}"
+            )
         else:
-            _LOGGER.debug("❌ No image remotely accessible topic configured, skipping subscription")
+            _LOGGER.debug(
+                "❌ No image remotely accessible topic configured, skipping subscription"
+            )
 
         # Final summary
         _LOGGER.debug("🎯 SUBSCRIPTION SETUP COMPLETED for entity: %s", self.entity_id)
-        _LOGGER.debug("📊 Total subscriptions object state: %s", len(getattr(self, '_subscriptions', {})))
+        _LOGGER.debug(
+            "📊 Total subscriptions object state: %s",
+            len(getattr(self, "_subscriptions", {})),
+        )
 
     async def _subscribe_topics(self) -> None:
         """(Re)Subscribe to topics."""
-        from homeassistant.components.mqtt.subscription import async_subscribe_topics_internal
-        _LOGGER.debug("🔌 Actually subscribing to MQTT topics for entity: %s", self.entity_id)
+        from homeassistant.components.mqtt.subscription import (
+            async_subscribe_topics_internal,
+        )
+
+        _LOGGER.debug(
+            "🔌 Actually subscribing to MQTT topics for entity: %s", self.entity_id
+        )
         async_subscribe_topics_internal(self.hass, self._sub_state)
         _LOGGER.debug("✅ MQTT subscription completed for entity: %s", self.entity_id)
 
@@ -501,7 +588,9 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
         """Send a next track command to the media player."""
         topic = self._config.get(CONF_NEXT_TRACK_TOPIC)
         if not topic:
-            _LOGGER.warning("Next track command called but no next track topic configured")
+            _LOGGER.warning(
+                "Next track command called but no next track topic configured"
+            )
             return
         _LOGGER.debug("⏭️ Sending NEXT TRACK command to topic: %s", topic)
         await self.async_publish(topic, "")
@@ -510,7 +599,9 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
         """Send a previous track command to the media player."""
         topic = self._config.get(CONF_PREVIOUS_TRACK_TOPIC)
         if not topic:
-            _LOGGER.warning("Previous track command called but no previous track topic configured")
+            _LOGGER.warning(
+                "Previous track command called but no previous track topic configured"
+            )
             return
         _LOGGER.debug("⏮️ Sending PREVIOUS TRACK command to topic: %s", topic)
         await self.async_publish(topic, "")
@@ -519,20 +610,30 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
         """Send a set volume level command to the media player."""
         topic = self._config.get(CONF_VOLUME_SET_TOPIC)
         if not topic:
-            _LOGGER.warning("Set volume level command called but no volume set topic configured")
+            _LOGGER.warning(
+                "Set volume level command called but no volume set topic configured"
+            )
             return
         payload = str(volume)
-        _LOGGER.debug("🔊 Sending SET VOLUME LEVEL command to topic: %s, payload: %s", topic, payload)
+        _LOGGER.debug(
+            "🔊 Sending SET VOLUME LEVEL command to topic: %s, payload: %s",
+            topic,
+            payload,
+        )
         await self.async_publish(topic, payload)
 
     async def async_mute_volume(self, mute: bool) -> None:
         """Send a mute volume command to the media player."""
         topic = self._config.get(CONF_VOLUME_MUTE_TOPIC)
         if not topic:
-            _LOGGER.warning("Mute volume command called but no volume mute topic configured")
+            _LOGGER.warning(
+                "Mute volume command called but no volume mute topic configured"
+            )
             return
         payload = "true" if mute else "false"
-        _LOGGER.debug("🔇 Sending MUTE VOLUME command to topic: %s, payload: %s", topic, payload)
+        _LOGGER.debug(
+            "🔇 Sending MUTE VOLUME command to topic: %s, payload: %s", topic, payload
+        )
         await self.async_publish(topic, payload)
 
     async def async_media_seek(self, position: float) -> None:
@@ -542,5 +643,7 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
             _LOGGER.warning("Seek command called but no seek topic configured")
             return
         payload = str(position)
-        _LOGGER.debug("⏩ Sending SEEK command to topic: %s, payload: %s", topic, payload)
+        _LOGGER.debug(
+            "⏩ Sending SEEK command to topic: %s, payload: %s", topic, payload
+        )
         await self.async_publish(topic, payload)
