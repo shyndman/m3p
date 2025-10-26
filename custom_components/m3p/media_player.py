@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import re
 import voluptuous as vol
-from homeassistant.components import media_player
+from homeassistant.components import media_player, mqtt
 from homeassistant.components.media_player import (
     MediaPlayerEntity,
 )
@@ -96,6 +96,17 @@ async def async_setup_entry(
     """Set up MQTT media player through YAML and through MQTT discovery."""
     _LOGGER.info(
         "[m3p] media_player.async_setup_entry called (entry_id=%s)",
+        config_entry.entry_id,
+    )
+    mqtt_ready = await mqtt.async_wait_for_mqtt_client(hass)
+    if not mqtt_ready:
+        _LOGGER.warning(
+            "[m3p] MQTT client not ready inside media_player platform (entry_id=%s)",
+            config_entry.entry_id,
+        )
+        return
+    _LOGGER.info(
+        "[m3p] MQTT client ready for media_player platform (entry_id=%s)",
         config_entry.entry_id,
     )
     async_setup_entity_entry_helper(
