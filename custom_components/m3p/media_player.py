@@ -94,6 +94,10 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up MQTT media player through YAML and through MQTT discovery."""
+    _LOGGER.info(
+        "[m3p] media_player.async_setup_entry called (entry_id=%s)",
+        config_entry.entry_id,
+    )
     async_setup_entity_entry_helper(
         hass,
         entry=config_entry,
@@ -124,12 +128,32 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
         # Initialize the base MqttEntity with discovery data
         super().__init__(hass, config, config_entry, discovery_data)
 
+        self._m3p_entry_id = config_entry.entry_id
+        self._m3p_discovery_present = discovery_data is not None
+        config_keys = sorted(config.keys()) if isinstance(config, dict) else []
+        _LOGGER.info(
+            "[m3p] MqttMediaPlayer init (entry_id=%s, entity_id=%s, discovery=%s, config_keys=%s)",
+            self._m3p_entry_id,
+            getattr(self, "entity_id", None),
+            self._m3p_discovery_present,
+            config_keys,
+        )
+
         _LOGGER.debug("MqttMediaPlayer initialized successfully")
 
     @staticmethod
     def config_schema() -> vol.Schema:
         """Return the config schema."""
         return DISCOVERY_SCHEMA
+
+    def _log_identity(self) -> str:
+        """Return a stable identifier for log messages."""
+
+        if getattr(self, "entity_id", None):
+            return self.entity_id
+        if getattr(self, "unique_id", None):
+            return f"unique_id={self.unique_id}"
+        return f"entry_id={self._m3p_entry_id}"
 
     def _setup_from_config(self, config: ConfigType) -> None:
         """(Re)Setup the entity."""
@@ -185,6 +209,12 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
             "MqttMediaPlayer setup completed with features: %s (%s)",
             features,
             ", ".join(feature_topics),
+        )
+        _LOGGER.info(
+            "[m3p] %s supported_features=%s topics=%s",
+            self._log_identity(),
+            features,
+            feature_topics or "<none>",
         )
 
     async def async_added_to_hass(self) -> None:
@@ -271,6 +301,17 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
             _LOGGER.debug("  %s (%s): %s", topic_name, topic_key, topic_value)
         _LOGGER.debug("=== END TOPIC CONFIGURATIONS ===")
 
+        configured_topics = {
+            topic_name: self._config.get(topic_key)
+            for topic_key, topic_name in all_topic_configs
+            if self._config.get(topic_key)
+        }
+        _LOGGER.info(
+            "[m3p] %s preparing MQTT subscriptions (configured_topics=%s)",
+            self._log_identity(),
+            configured_topics or "<none>",
+        )
+
         @callback
         def state_message_received(msg: ReceiveMessage) -> None:
             """Handle new MQTT state messages."""
@@ -322,6 +363,11 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
             if not success:
                 _LOGGER.error("Failed to subscribe to state topic: %s", state_topic)
                 raise RuntimeError(f"Failed to subscribe to state topic: {state_topic}")
+            _LOGGER.info(
+                "[m3p] %s subscribed to state topic=%s",
+                self._log_identity(),
+                state_topic,
+            )
         else:
             _LOGGER.debug("❌ No state topic configured, skipping state subscription")
 
@@ -369,6 +415,11 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
                 raise RuntimeError(
                     f"Failed to subscribe to volume topic: {volume_topic}"
                 )
+            _LOGGER.info(
+                "[m3p] %s subscribed to volume topic=%s",
+                self._log_identity(),
+                volume_topic,
+            )
         else:
             _LOGGER.debug("❌ No volume topic configured, skipping volume subscription")
 
@@ -391,6 +442,11 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
             if not success:
                 _LOGGER.error("Failed to subscribe to title topic: %s", title_topic)
                 raise RuntimeError(f"Failed to subscribe to title topic: {title_topic}")
+            _LOGGER.info(
+                "[m3p] %s subscribed to title topic=%s",
+                self._log_identity(),
+                title_topic,
+            )
         else:
             _LOGGER.debug("❌ No title topic configured, skipping title subscription")
 
@@ -415,6 +471,11 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
                 raise RuntimeError(
                     f"Failed to subscribe to artist topic: {artist_topic}"
                 )
+            _LOGGER.info(
+                "[m3p] %s subscribed to artist topic=%s",
+                self._log_identity(),
+                artist_topic,
+            )
         else:
             _LOGGER.debug("❌ No artist topic configured, skipping artist subscription")
 
@@ -439,6 +500,11 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
             if not success:
                 _LOGGER.error("Failed to subscribe to album topic: %s", album_topic)
                 raise RuntimeError(f"Failed to subscribe to album topic: {album_topic}")
+            _LOGGER.info(
+                "[m3p] %s subscribed to album topic=%s",
+                self._log_identity(),
+                album_topic,
+            )
         else:
             _LOGGER.debug("❌ No album topic configured, skipping album subscription")
 
@@ -488,6 +554,11 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
                 raise RuntimeError(
                     f"Failed to subscribe to duration topic: {duration_topic}"
                 )
+            _LOGGER.info(
+                "[m3p] %s subscribed to duration topic=%s",
+                self._log_identity(),
+                duration_topic,
+            )
         else:
             _LOGGER.debug(
                 "❌ No duration topic configured, skipping duration subscription"
@@ -539,6 +610,11 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
                 raise RuntimeError(
                     f"Failed to subscribe to position topic: {position_topic}"
                 )
+            _LOGGER.info(
+                "[m3p] %s subscribed to position topic=%s",
+                self._log_identity(),
+                position_topic,
+            )
         else:
             _LOGGER.debug(
                 "❌ No position topic configured, skipping position subscription"
@@ -584,6 +660,11 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
                 raise RuntimeError(
                     f"Failed to subscribe to image URL topic: {image_url_topic}"
                 )
+            _LOGGER.info(
+                "[m3p] %s subscribed to image_url topic=%s",
+                self._log_identity(),
+                image_url_topic,
+            )
         else:
             _LOGGER.debug(
                 "❌ No image URL topic configured, skipping image URL subscription"
@@ -633,6 +714,11 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
                 raise RuntimeError(
                     f"Failed to subscribe to image accessible topic: {image_accessible_topic}"
                 )
+            _LOGGER.info(
+                "[m3p] %s subscribed to image_accessible topic=%s",
+                self._log_identity(),
+                image_accessible_topic,
+            )
         else:
             _LOGGER.debug(
                 "❌ No image remotely accessible topic configured, skipping subscription"
@@ -656,6 +742,11 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
         )
         async_subscribe_topics_internal(self.hass, self._sub_state)
         _LOGGER.debug("✅ MQTT subscription completed for entity: %s", self.entity_id)
+        _LOGGER.info(
+            "[m3p] %s MQTT topic subscription batch complete (subscriptions=%s)",
+            self._log_identity(),
+            list(getattr(self, "_subscriptions", {}).keys()),
+        )
 
     async def async_media_play(self) -> None:
         """Send a play command to the media player."""
