@@ -277,12 +277,12 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
             _LOGGER.debug(
                 "🔥 STATE MESSAGE RECEIVED on topic %s: %s", msg.topic, msg.payload
             )
-            
+
             state_str = self._decode_payload(msg.payload)
             if not state_str:
                 _LOGGER.debug("Empty state payload received, ignoring")
                 return
-                
+
             # Normalize to lowercase once
             state_str = state_str.lower()
 
@@ -331,27 +331,29 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
             _LOGGER.debug(
                 "🔊 VOLUME MESSAGE RECEIVED on topic %s: %s", msg.topic, msg.payload
             )
-            
+
             payload_str = self._decode_payload(msg.payload)
             if not payload_str:
                 _LOGGER.debug("Empty volume payload received, ignoring")
                 return
-                
+
             try:
                 volume = float(payload_str)
             except (ValueError, TypeError) as e:
                 _LOGGER.warning(
-                    "Invalid volume level format received: %s, error: %s", msg.payload, e
+                    "Invalid volume level format received: %s, error: %s",
+                    msg.payload,
+                    e,
                 )
                 return
-                
+
             # Validate volume is in range 0.0 to 1.0
             if not 0.0 <= volume <= 1.0:
                 _LOGGER.warning(
                     "Volume level out of range: %s. Must be between 0.0 and 1.0", volume
                 )
                 return
-                
+
             self._attr_volume_level = volume
             self.async_write_ha_state()
             _LOGGER.debug("✅ Volume updated to: %s", self._attr_volume_level)
@@ -364,7 +366,9 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
             )
             if not success:
                 _LOGGER.error("Failed to subscribe to volume topic: %s", volume_topic)
-                raise RuntimeError(f"Failed to subscribe to volume topic: {volume_topic}")
+                raise RuntimeError(
+                    f"Failed to subscribe to volume topic: {volume_topic}"
+                )
         else:
             _LOGGER.debug("❌ No volume topic configured, skipping volume subscription")
 
@@ -408,7 +412,9 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
             )
             if not success:
                 _LOGGER.error("Failed to subscribe to artist topic: %s", artist_topic)
-                raise RuntimeError(f"Failed to subscribe to artist topic: {artist_topic}")
+                raise RuntimeError(
+                    f"Failed to subscribe to artist topic: {artist_topic}"
+                )
         else:
             _LOGGER.debug("❌ No artist topic configured, skipping artist subscription")
 
@@ -442,27 +448,27 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
             _LOGGER.debug(
                 "⏱️ DURATION MESSAGE RECEIVED on topic %s: %s", msg.topic, msg.payload
             )
-            
+
             payload_str = self._decode_payload(msg.payload)
             if not payload_str:
                 _LOGGER.debug("Empty duration payload received, ignoring")
                 return
-                
+
             try:
                 duration = int(payload_str)
             except (ValueError, TypeError) as e:
                 _LOGGER.warning(
-                    "Invalid media duration format received: %s, error: %s", msg.payload, e
+                    "Invalid media duration format received: %s, error: %s",
+                    msg.payload,
+                    e,
                 )
                 return
-                
+
             # Validate duration is non-negative
             if duration < 0:
-                _LOGGER.warning(
-                    "Media duration cannot be negative: %s", duration
-                )
+                _LOGGER.warning("Media duration cannot be negative: %s", duration)
                 return
-                
+
             self._attr_media_duration = duration
             self.async_write_ha_state()
             _LOGGER.debug("✅ Media duration updated to: %s", self._attr_media_duration)
@@ -476,8 +482,12 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
                 {"_attr_media_duration"},
             )
             if not success:
-                _LOGGER.error("Failed to subscribe to duration topic: %s", duration_topic)
-                raise RuntimeError(f"Failed to subscribe to duration topic: {duration_topic}")
+                _LOGGER.error(
+                    "Failed to subscribe to duration topic: %s", duration_topic
+                )
+                raise RuntimeError(
+                    f"Failed to subscribe to duration topic: {duration_topic}"
+                )
         else:
             _LOGGER.debug(
                 "❌ No duration topic configured, skipping duration subscription"
@@ -489,27 +499,27 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
             _LOGGER.debug(
                 "⏲️ POSITION MESSAGE RECEIVED on topic %s: %s", msg.topic, msg.payload
             )
-            
+
             payload_str = self._decode_payload(msg.payload)
             if not payload_str:
                 _LOGGER.debug("Empty position payload received, ignoring")
                 return
-                
+
             try:
                 position = int(payload_str)
             except (ValueError, TypeError) as e:
                 _LOGGER.warning(
-                    "Invalid media position format received: %s, error: %s", msg.payload, e
+                    "Invalid media position format received: %s, error: %s",
+                    msg.payload,
+                    e,
                 )
                 return
-                
+
             # Validate position is non-negative
             if position < 0:
-                _LOGGER.warning(
-                    "Media position cannot be negative: %s", position
-                )
+                _LOGGER.warning("Media position cannot be negative: %s", position)
                 return
-                
+
             self._attr_media_position = position
             self.async_write_ha_state()
             _LOGGER.debug("✅ Media position updated to: %s", self._attr_media_position)
@@ -523,8 +533,12 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
                 {"_attr_media_position"},
             )
             if not success:
-                _LOGGER.error("Failed to subscribe to position topic: %s", position_topic)
-                raise RuntimeError(f"Failed to subscribe to position topic: {position_topic}")
+                _LOGGER.error(
+                    "Failed to subscribe to position topic: %s", position_topic
+                )
+                raise RuntimeError(
+                    f"Failed to subscribe to position topic: {position_topic}"
+                )
         else:
             _LOGGER.debug(
                 "❌ No position topic configured, skipping position subscription"
@@ -564,8 +578,12 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
                 {"_attr_media_image_url"},
             )
             if not success:
-                _LOGGER.error("Failed to subscribe to image URL topic: %s", image_url_topic)
-                raise RuntimeError(f"Failed to subscribe to image URL topic: {image_url_topic}")
+                _LOGGER.error(
+                    "Failed to subscribe to image URL topic: %s", image_url_topic
+                )
+                raise RuntimeError(
+                    f"Failed to subscribe to image URL topic: {image_url_topic}"
+                )
         else:
             _LOGGER.debug(
                 "❌ No image URL topic configured, skipping image URL subscription"
@@ -609,7 +627,8 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
             )
             if not success:
                 _LOGGER.error(
-                    "Failed to subscribe to image accessible topic: %s", image_accessible_topic
+                    "Failed to subscribe to image accessible topic: %s",
+                    image_accessible_topic,
                 )
                 raise RuntimeError(
                     f"Failed to subscribe to image accessible topic: {image_accessible_topic}"
@@ -686,7 +705,9 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
         try:
             await self.async_publish(topic, "")
         except Exception as e:
-            _LOGGER.error("Failed to publish next track command to topic %s: %s", topic, e)
+            _LOGGER.error(
+                "Failed to publish next track command to topic %s: %s", topic, e
+            )
 
     async def async_media_previous_track(self) -> None:
         """Send a previous track command to the media player."""
@@ -700,7 +721,9 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
         try:
             await self.async_publish(topic, "")
         except Exception as e:
-            _LOGGER.error("Failed to publish previous track command to topic %s: %s", topic, e)
+            _LOGGER.error(
+                "Failed to publish previous track command to topic %s: %s", topic, e
+            )
 
     async def async_set_volume_level(self, volume: float) -> None:
         """Send a set volume level command to the media player."""
@@ -719,7 +742,9 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
         try:
             await self.async_publish(topic, payload)
         except Exception as e:
-            _LOGGER.error("Failed to publish volume level command to topic %s: %s", topic, e)
+            _LOGGER.error(
+                "Failed to publish volume level command to topic %s: %s", topic, e
+            )
 
     async def async_mute_volume(self, mute: bool) -> None:
         """Send a mute volume command to the media player."""
@@ -736,7 +761,9 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
         try:
             await self.async_publish(topic, payload)
         except Exception as e:
-            _LOGGER.error("Failed to publish mute volume command to topic %s: %s", topic, e)
+            _LOGGER.error(
+                "Failed to publish mute volume command to topic %s: %s", topic, e
+            )
 
     async def async_media_seek(self, position: float) -> None:
         """Send a seek command to the media player."""
