@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import logging
 import re
-from enum import StrEnum
-
 import voluptuous as vol
 from homeassistant.components import media_player
 from homeassistant.components.media_player import (
@@ -33,6 +31,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 
 from custom_components.m3p.const import (
     CONF_MEDIA_ALBUM_NAME_TOPIC,
@@ -59,17 +58,6 @@ _LOGGER = logging.getLogger(__name__)
 
 # Pattern to detect image data URIs
 DATA_URI_IMAGE_PATTERN = re.compile(r"^data:image/[^;]+;base64")
-
-
-class ValidMediaPlayerStates(StrEnum):
-    """Valid media player states that can be received via MQTT."""
-    PLAYING = "playing"
-    PAUSED = "paused"
-    IDLE = "idle"
-    OFF = "off"
-    ON = "on"
-    STANDBY = "standby"
-    BUFFERING = "buffering"
 
 
 PLATFORM_SCHEMA_MODERN = MQTT_RO_SCHEMA.extend(
@@ -192,10 +180,6 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
                 ", ".join(feature_topics) if feature_topics else "none",
             )
 
-            # Invalidate the cached property to force recalculation
-            if hasattr(self, "supported_features"):
-                delattr(self, "supported_features")
-
         self._attr_supported_features = features
         _LOGGER.debug(
             "MqttMediaPlayer setup completed with features: %s (%s)",
@@ -301,21 +285,33 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
                 
             # Normalize to lowercase once
             state_str = state_str.lower()
-            
-            # Validate the state string against known MediaPlayerState values
-            if state_str not in ValidMediaPlayerStates:
+
+            # Handle HA special cases first
+            if state_str == STATE_UNAVAILABLE:
+                self._attr_available = False
+                self.async_write_ha_state()
+                _LOGGER.debug("✅ Marked entity unavailable due to MQTT payload")
+                return
+
+            self._attr_available = True
+
+            if state_str == STATE_UNKNOWN:
+                self._attr_state = STATE_UNKNOWN
+                self.async_write_ha_state()
+                _LOGGER.debug("✅ State marked as unknown from MQTT payload")
+                return
+
+            try:
+                new_state = MediaPlayerState(state_str)
+            except ValueError:
                 _LOGGER.warning(
-                    "Invalid media player state received: %s. Valid states are: %s", 
-                    state_str, ", ".join(ValidMediaPlayerStates)
+                    "Invalid media player state received: %s. Ignoring.", state_str
                 )
                 return
-                
-            try:
-                self._attr_state = MediaPlayerState(state_str)
-                self.async_write_ha_state()
-                _LOGGER.debug("✅ State updated to: %s", self._attr_state)
-            except ValueError as e:
-                _LOGGER.warning("Failed to set media player state %s: %s", state_str, e)
+
+            self._attr_state = new_state
+            self.async_write_ha_state()
+            _LOGGER.debug("✅ State updated to: %s", self._attr_state)
 
         state_topic = self._config.get(CONF_STATE_TOPIC)
         _LOGGER.debug("📡 SUBSCRIBING TO STATE TOPIC: %s", state_topic)
