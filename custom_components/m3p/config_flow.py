@@ -56,6 +56,15 @@ class MqttMediaPlayerConfigFlow(ConfigFlow, domain=DOMAIN):
                     "[m3p] Empty discovery payload received for topic=%s",
                     discovery_info.topic,
                 )
+                for entry in self._async_current_entries():
+                    if entry.data.get("discovery_topic") == discovery_info.topic:
+                        _LOGGER.info(
+                            "[m3p] Removing config entry for topic=%s (entry_id=%s)",
+                            discovery_info.topic,
+                            entry.entry_id,
+                        )
+                        await self.hass.config_entries.async_remove(entry.entry_id)
+                        return self.async_abort(reason="removed")
                 return self.async_abort(reason="empty_payload")
 
             payload = json.loads(discovery_info.payload)
