@@ -379,6 +379,8 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
             success = self.add_subscription(
                 CONF_STATE_TOPIC, state_message_received, {"_attr_state"}
             )
+            # Defensive: add_subscription is from HA's MqttEntity and currently can't
+            # fail if topic is truthy, but we guard against future API changes.
             if not success:
                 _LOGGER.error("Failed to subscribe to state topic: %s", state_topic)
                 raise RuntimeError(f"Failed to subscribe to state topic: {state_topic}")
