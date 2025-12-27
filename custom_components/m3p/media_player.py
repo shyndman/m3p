@@ -32,6 +32,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
+from homeassistant.util.dt import utcnow
 
 from custom_components.m3p.const import (
     CONF_MEDIA_ALBUM_NAME_TOPIC,
@@ -642,6 +643,7 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
                 return
 
             self._attr_media_position = position
+            self._attr_media_position_updated_at = utcnow()
             self.async_write_ha_state()
             _LOGGER.debug("✅ Media position updated to: %s", self._attr_media_position)
             _LOGGER.info(
