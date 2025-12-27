@@ -1,0 +1,14 @@
+[project]
+name = "mock-player"
+version = "0.1.0"
+description = "Standalone mock media player for M3P manual testing"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "ha-mqtt-discoverable",
+    "paho-mqtt>=2.1.0",
+    "pillow>=12.0.0",
+]
+
+[tool.uv.sources]
+ha-mqtt-discoverable = { git = "https://github.com/shyndman/ha-mqtt-discoverable.git", rev = "main" }

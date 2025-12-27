@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ENV_FILE="$ROOT_DIR/tools/.env"
+
+if [[ -f "$ENV_FILE" ]]; then
+  set -a
+  source "$ENV_FILE"
+  set +a
+fi
+
+export PYTHONPATH="$ROOT_DIR/tools/mock-player/src"
+
+cd "$ROOT_DIR/tools/mock-player"
+exec uv run python -m mock_player.main "$@"
