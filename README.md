@@ -33,24 +33,9 @@ A Home Assistant custom component that creates MQTT-based media players with ful
 
 ## Configuration
 
-### Via UI (Recommended)
+This integration uses MQTT discovery. Your media player device should publish a discovery message to `homeassistant/media_player/<node_id>/<object_id>/config` with the appropriate configuration payload.
 
-1. Go to Settings → Devices & Services
-2. Click "Add Integration"
-3. Search for "Mellow MQTT Media Player"
-4. Follow the configuration flow
-
-### Via YAML
-
-Add the following to your `configuration.yaml`:
-
-```yaml
-media_player:
-  - platform: m3p
-    name: "My MQTT Player"
-    state_topic: "media/player/state"
-    command_topic: "media/player/command"
-```
+Once discovered, the media player will appear automatically in Home Assistant.
 
 ## MQTT Topics
 
