@@ -5,19 +5,9 @@ from __future__ import annotations
 import logging
 
 from homeassistant.components import mqtt
-from homeassistant.components.mqtt.const import (
-    ATTR_DISCOVERY_HASH,
-    ATTR_DISCOVERY_PAYLOAD,
-    ATTR_DISCOVERY_TOPIC,
-)
-from homeassistant.components.mqtt.discovery import (
-    MQTT_DISCOVERY_NEW,
-    MQTTDiscoveryPayload,
-)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.typing import ConfigType
 
 from .const import DOMAIN
@@ -53,51 +43,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _LOGGER.info("[m3p] MQTT client ready for entry_id=%s", entry.entry_id)
 
     # Forward the entry setup to the media_player platform
+    # Entity creation happens directly in media_player.async_setup_entry
     await hass.config_entries.async_forward_entry_setups(entry, ["media_player"])
     _LOGGER.info(
         "[m3p] Entry forwarded to media_player platform (entry_id=%s)",
         entry.entry_id,
     )
-
-    # If we have a discovery payload, fire the discovery signal after platform is set up
-    if "discovery_payload" in entry.data and "discovery_topic" in entry.data:
-        _LOGGER.info(
-            "[m3p] Replaying stored discovery payload (entry_id=%s, topic=%s)",
-            entry.entry_id,
-            entry.data["discovery_topic"],
-        )
-
-        # Create the discovery payload object that MQTT expects
-        # MQTTDiscoveryPayload is a dict subclass, initialized with the JSON payload
-        discovery_payload = MQTTDiscoveryPayload(entry.data["discovery_payload"])
-
-        # Extract node_id and object_id from the discovery topic
-        # Topic format: homeassistant/media_player/{node_id}/{object_id}/config
-        topic_parts = entry.data["discovery_topic"].split("/")
-        node_id = topic_parts[2] if len(topic_parts) > 2 else ""
-        object_id = topic_parts[3] if len(topic_parts) > 3 else "mqtt"
-
-        # Create discovery_id (same logic as in discovery.py line 496)
-        discovery_id = f"{node_id} {object_id}" if node_id else object_id
-        discovery_hash = ("media_player", discovery_id)
-
-        # Set the discovery_data attribute (as done in discovery.py line 500-504)
-
-        discovery_payload.discovery_data = {
-            ATTR_DISCOVERY_HASH: discovery_hash,
-            ATTR_DISCOVERY_PAYLOAD: discovery_payload,
-            ATTR_DISCOVERY_TOPIC: entry.data["discovery_topic"],
-        }
-
-        # Fire the discovery signal that the media_player platform is listening for
-        async_dispatcher_send(
-            hass, MQTT_DISCOVERY_NEW.format("media_player", "mqtt"), discovery_payload
-        )
-        _LOGGER.info(
-            "[m3p] Discovery signal dispatched (entry_id=%s, hash=%s)",
-            entry.entry_id,
-            discovery_hash,
-        )
 
     _LOGGER.info("[m3p] async_setup_entry complete (entry_id=%s)", entry.entry_id)
     return True

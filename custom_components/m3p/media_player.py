@@ -20,10 +20,12 @@ from homeassistant.components.mqtt import (
     CONF_STATE_TOPIC,
 )
 from homeassistant.components.mqtt.config import MQTT_RO_SCHEMA
-from homeassistant.components.mqtt.entity import (
-    MqttEntity,
-    async_setup_entity_entry_helper,
+from homeassistant.components.mqtt.const import (
+    ATTR_DISCOVERY_HASH,
+    ATTR_DISCOVERY_PAYLOAD,
+    ATTR_DISCOVERY_TOPIC,
 )
+from homeassistant.components.mqtt.entity import MqttEntity
 from homeassistant.components.mqtt.models import ReceiveMessage
 from homeassistant.components.mqtt.schemas import MQTT_ENTITY_COMMON_SCHEMA
 from homeassistant.config_entries import ConfigEntry
@@ -94,7 +96,7 @@ async def async_setup_entry(
     config_entry: ConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Set up MQTT media player through YAML and through MQTT discovery."""
+    """Set up MQTT media player from a config entry."""
     _LOGGER.info(
         "[m3p] media_player.async_setup_entry called (entry_id=%s)",
         config_entry.entry_id,
@@ -110,15 +112,50 @@ async def async_setup_entry(
         "[m3p] MQTT client ready for media_player platform (entry_id=%s)",
         config_entry.entry_id,
     )
-    async_setup_entity_entry_helper(
-        hass,
-        entry=config_entry,
-        entity_class=MqttMediaPlayer,
-        domain=MEDIA_PLAYER_DOMAIN,
-        async_add_entities=async_add_entities,
-        discovery_schema=DISCOVERY_SCHEMA,
-        platform_schema_modern=PLATFORM_SCHEMA_MODERN,
+
+    # Get discovery payload from config entry data
+    discovery_payload = config_entry.data.get("discovery_payload", {})
+    discovery_topic = config_entry.data.get("discovery_topic")
+
+    if not discovery_payload:
+        _LOGGER.error(
+            "[m3p] No discovery payload in config entry (entry_id=%s)",
+            config_entry.entry_id,
+        )
+        return
+
+    # Validate through schema
+    try:
+        config = DISCOVERY_SCHEMA(discovery_payload)
+    except vol.Invalid as err:
+        _LOGGER.error(
+            "[m3p] Invalid discovery payload (entry_id=%s, error=%s)",
+            config_entry.entry_id,
+            err,
+        )
+        return
+
+    # Build discovery_data structure that MqttEntity expects
+    topic_parts = discovery_topic.split("/") if discovery_topic else []
+    node_id = topic_parts[2] if len(topic_parts) > 2 else ""
+    object_id = topic_parts[3] if len(topic_parts) > 3 else "mqtt"
+    discovery_id = f"{node_id} {object_id}" if node_id else object_id
+    discovery_hash = (MEDIA_PLAYER_DOMAIN, discovery_id)
+
+    discovery_data = {
+        ATTR_DISCOVERY_HASH: discovery_hash,
+        ATTR_DISCOVERY_PAYLOAD: discovery_payload,
+        ATTR_DISCOVERY_TOPIC: discovery_topic,
+    }
+
+    _LOGGER.info(
+        "[m3p] Creating entity directly (entry_id=%s, discovery_hash=%s)",
+        config_entry.entry_id,
+        discovery_hash,
     )
+
+    # Create entity directly - no global signal mechanism
+    async_add_entities([MqttMediaPlayer(hass, config, config_entry, discovery_data)])
 
 
 class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
@@ -870,9 +907,7 @@ class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
             )
             return
         _LOGGER.debug("⏭️ Sending NEXT TRACK command to topic: %s", topic)
-        _LOGGER.info(
-            "[m3p] %s publish NEXT (topic=%s)", self._log_identity(), topic
-        )
+        _LOGGER.info("[m3p] %s publish NEXT (topic=%s)", self._log_identity(), topic)
         try:
             await self.async_publish(topic, "")
         except Exception as e:
