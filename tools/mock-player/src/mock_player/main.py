@@ -8,7 +8,6 @@ import os
 import random
 import signal
 import threading
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
@@ -17,7 +16,11 @@ import paho.mqtt.client as mqtt
 from PIL import Image, ImageDraw, ImageFont
 
 from ha_mqtt_discoverable import DeviceInfo, Discoverable, Settings
-from ha_mqtt_discoverable.media_player import MediaPlayer, MediaPlayerCallbacks, MediaPlayerInfo
+from ha_mqtt_discoverable.media_player import (
+    MediaPlayer,
+    MediaPlayerCallbacks,
+    MediaPlayerInfo,
+)
 
 LOGGER = logging.getLogger("mock_player")
 
@@ -51,8 +54,16 @@ class Track:
 class WebSocketMediaPlayer(MediaPlayer):
     """MediaPlayer that ensures WebSocket clients subscribe on connect."""
 
-    def __init__(self, settings: Settings[MediaPlayerInfo], callbacks: MediaPlayerCallbacks, user_data=None) -> None:
-        LOGGER.debug("Initializing WebSocketMediaPlayer with callbacks: %s", list(callbacks.keys()))
+    def __init__(
+        self,
+        settings: Settings[MediaPlayerInfo],
+        callbacks: MediaPlayerCallbacks,
+        user_data=None,
+    ) -> None:
+        LOGGER.debug(
+            "Initializing WebSocketMediaPlayer with callbacks: %s",
+            list(callbacks.keys()),
+        )
         self._callbacks = callbacks
         self._topics = {}
         self._generate_topics(settings)
@@ -119,7 +130,9 @@ class MockPlayer:
         if use_tls:
             mqtt_client.tls_set()
         if self._config.mqtt_username:
-            mqtt_client.username_pw_set(self._config.mqtt_username, self._config.mqtt_password)
+            mqtt_client.username_pw_set(
+                self._config.mqtt_username, self._config.mqtt_password
+            )
 
         mqtt_settings = Settings.MQTT(
             host=host,
@@ -156,13 +169,17 @@ class MockPlayer:
             "volume_mute": self._on_volume_mute,
         }
 
-        settings = Settings(mqtt=mqtt_settings, entity=entity_info, manual_availability=True)
+        settings = Settings(
+            mqtt=mqtt_settings, entity=entity_info, manual_availability=True
+        )
         player = WebSocketMediaPlayer(settings, callbacks)
         LOGGER.info("Connected to MQTT broker at %s:%s via WebSocket", host, port)
         return player
 
     def _start_loop(self) -> None:
-        self._thread = threading.Thread(target=self._playback_loop, name="mock-player-loop", daemon=True)
+        self._thread = threading.Thread(
+            target=self._playback_loop, name="mock-player-loop", daemon=True
+        )
         self._thread.start()
 
     def _playback_loop(self) -> None:
@@ -326,7 +343,7 @@ def _load_env_file(path: Path) -> None:
             continue
         key, value = line.split("=", 1)
         key = key.strip()
-        value = value.strip().strip("\"\'")
+        value = value.strip().strip("\"'")
         if key and key not in os.environ:
             os.environ[key] = value
 
