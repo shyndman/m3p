@@ -146,6 +146,7 @@ def _install_homeassistant_stubs() -> None:
     helpers_typing.ConfigType = dict[str, Any]
     helpers_typing.DiscoveryInfoType = dict[str, Any]
     ha_const = ModuleType("homeassistant.const")
+    ha_const.CONF_NAME = "name"
     ha_const.STATE_UNAVAILABLE = "unavailable"
     ha_const.STATE_UNKNOWN = "unknown"
     util = ModuleType("homeassistant.util")
@@ -214,6 +215,14 @@ def _make_player(
     player.add_subscription = add_subscription
     player.async_write_ha_state = lambda: writes.append("write")
     return player, subscriptions, writes
+
+
+def test_config_schema_preserves_discovered_name() -> None:
+    schema = MqttMediaPlayer.config_schema()
+
+    config = schema({"name": "Desktop Media"})
+
+    assert config["name"] == "Desktop Media"
 
 
 def test_config_schema_accepts_split_state_and_command_topics() -> None:

@@ -37,7 +37,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
-from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
+from homeassistant.const import CONF_NAME, STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.util.dt import utcnow
 
 from custom_components.mqtt_media_bridge.const import (
@@ -96,6 +96,7 @@ def _clear_attr(entity: MediaPlayerEntity, name: str) -> None:
 PLATFORM_SCHEMA_MODERN = MQTT_RO_SCHEMA.extend(
     {
         # Attributes
+        vol.Optional(CONF_NAME): vol.Any(cv.string, None),
         vol.Optional(CONF_MEDIA_ALBUM_NAME_TOPIC): cv.string,
         vol.Optional(CONF_MEDIA_ARTIST_TOPIC): cv.string,
         vol.Optional(CONF_MEDIA_DURATION_TOPIC): cv.string,
