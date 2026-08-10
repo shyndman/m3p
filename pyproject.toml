@@ -49,6 +49,8 @@ markers = [
 filterwarnings = [
     # Treat warnings as errors to catch issues early
     "error",
+    # Home Assistant HTTP server compatibility assignment with a plain string key
+    'ignore:^It is recommended to use web\.AppKey instances for keys\.:aiohttp.web_exceptions.NotAppKeyWarning:homeassistant\.components\.http\.server',
     # Ignore specific warnings from third-party libraries as needed
     # "ignore:.*custom_components.* is using deprecated.*:DeprecationWarning",
 ]

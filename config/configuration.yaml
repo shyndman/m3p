@@ -97,6 +97,7 @@ recorder:
 logger:
   default: info
   logs:
+    mqtt: debug
     # Reduce noise from chatty components
     homeassistant.components.recorder: warning
     homeassistant.components.recorder.util: warning

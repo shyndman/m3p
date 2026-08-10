@@ -1,0 +1,1307 @@
+"""Support for MQTT Media Bridge media players."""
+
+from __future__ import annotations
+
+from contextlib import suppress
+import json
+import logging
+import re
+from typing import Any, cast
+
+import voluptuous as vol
+
+from custom_components.mqtt_media_bridge.const import (
+    CONF_MEDIA_ALBUM_NAME_TOPIC,
+    CONF_MEDIA_ARTIST_TOPIC,
+    CONF_MEDIA_DURATION_TOPIC,
+    CONF_MEDIA_IMAGE_REMOTELY_ACCESSIBLE_TOPIC,
+    CONF_MEDIA_IMAGE_URL_TOPIC,
+    CONF_MEDIA_POSITION_TOPIC,
+    CONF_MEDIA_TITLE_TOPIC,
+    CONF_NEXT_TRACK_TOPIC,
+    CONF_PAUSE_TOPIC,
+    CONF_PLAY_MEDIA_TOPIC,
+    CONF_PLAY_TOPIC,
+    CONF_PREVIOUS_TRACK_TOPIC,
+    CONF_REPEAT_SET_TOPIC,
+    CONF_REPEAT_STATE_TOPIC,
+    CONF_SEEK_TOPIC,
+    CONF_SELECT_SOUND_MODE_TOPIC,
+    CONF_SELECT_SOURCE_TOPIC,
+    CONF_SHUFFLE_SET_TOPIC,
+    CONF_SHUFFLE_STATE_TOPIC,
+    CONF_SOUND_MODE_LIST,
+    CONF_SOURCE_LIST,
+    CONF_STOP_TOPIC,
+    CONF_TURN_OFF_TOPIC,
+    CONF_TURN_ON_TOPIC,
+    CONF_VOLUME_LEVEL_TOPIC,
+    CONF_VOLUME_MUTE_COMMAND_TOPIC,
+    CONF_VOLUME_MUTE_STATE_TOPIC,
+    CONF_VOLUME_SET_TOPIC,
+    CONF_VOLUME_STEP,
+    DEFAULT_NAME,
+)
+from homeassistant.components import media_player, mqtt
+from homeassistant.components.media_player import MediaPlayerEntity
+from homeassistant.components.media_player.const import (
+    DOMAIN as MEDIA_PLAYER_DOMAIN,
+    MediaPlayerEntityFeature,
+    MediaPlayerState,
+    RepeatMode,
+)
+from homeassistant.components.mqtt import CONF_STATE_TOPIC
+from homeassistant.components.mqtt.config import MQTT_RO_SCHEMA
+from homeassistant.components.mqtt.const import ATTR_DISCOVERY_HASH, ATTR_DISCOVERY_PAYLOAD, ATTR_DISCOVERY_TOPIC
+from homeassistant.components.mqtt.entity import MqttEntity
+from homeassistant.components.mqtt.models import ReceiveMessage
+from homeassistant.components.mqtt.schemas import MQTT_ENTITY_COMMON_SCHEMA
+from homeassistant.components.mqtt.subscription import async_subscribe_topics_internal
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import CONF_NAME, STATE_UNAVAILABLE, STATE_UNKNOWN
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
+from homeassistant.util.dt import utcnow
+
+_LOGGER = logging.getLogger(__name__)
+
+# Pattern to detect image data URIs
+DATA_URI_IMAGE_PATTERN = re.compile(r"^data:image/[^;]+;base64")
+
+
+def _clear_attr(entity: MediaPlayerEntity, name: str) -> None:
+    """Revert an HA `_attr_` cached property to its default.
+
+    # DANGER! Relies on HA's CachedProperties deleter: it invalidates the
+    # cache then deletes the private backing attr, raising AttributeError
+    # when no value was ever set. We swallow that case. If HA changes this
+    # internal behavior, revisit here.
+    """
+    with suppress(AttributeError):
+        delattr(entity, name)
+
+
+PLATFORM_SCHEMA_MODERN = MQTT_RO_SCHEMA.extend(
+    {
+        # Attributes
+        vol.Optional(CONF_NAME): vol.Any(cv.string, None),
+        vol.Optional(CONF_MEDIA_ALBUM_NAME_TOPIC): cv.string,
+        vol.Optional(CONF_MEDIA_ARTIST_TOPIC): cv.string,
+        vol.Optional(CONF_MEDIA_DURATION_TOPIC): cv.string,
+        vol.Optional(CONF_MEDIA_IMAGE_REMOTELY_ACCESSIBLE_TOPIC): cv.string,
+        vol.Optional(CONF_MEDIA_IMAGE_URL_TOPIC): cv.string,
+        vol.Optional(CONF_MEDIA_POSITION_TOPIC): cv.string,
+        vol.Optional(CONF_SOURCE_LIST): [cv.string],
+        vol.Optional(CONF_MEDIA_TITLE_TOPIC): cv.string,
+        vol.Optional(CONF_STATE_TOPIC): cv.string,
+        vol.Optional(CONF_REPEAT_STATE_TOPIC): cv.string,
+        vol.Optional(CONF_SHUFFLE_STATE_TOPIC): cv.string,
+        vol.Optional(CONF_SOUND_MODE_LIST): [cv.string],
+        vol.Optional(CONF_VOLUME_LEVEL_TOPIC): cv.string,
+        vol.Optional(CONF_VOLUME_MUTE_STATE_TOPIC): cv.string,
+        # Commands
+        vol.Optional(CONF_NEXT_TRACK_TOPIC): cv.string,
+        vol.Optional(CONF_PAUSE_TOPIC): cv.string,
+        vol.Optional(CONF_PLAY_TOPIC): cv.string,
+        vol.Optional(CONF_PLAY_MEDIA_TOPIC): cv.string,
+        vol.Optional(CONF_PREVIOUS_TRACK_TOPIC): cv.string,
+        vol.Optional(CONF_REPEAT_SET_TOPIC): cv.string,
+        vol.Optional(CONF_SEEK_TOPIC): cv.string,
+        vol.Optional(CONF_SELECT_SOUND_MODE_TOPIC): cv.string,
+        vol.Optional(CONF_SELECT_SOURCE_TOPIC): cv.string,
+        vol.Optional(CONF_SHUFFLE_SET_TOPIC): cv.string,
+        vol.Optional(CONF_STOP_TOPIC): cv.string,
+        vol.Optional(CONF_TURN_OFF_TOPIC): cv.string,
+        vol.Optional(CONF_TURN_ON_TOPIC): cv.string,
+        vol.Optional(CONF_VOLUME_MUTE_COMMAND_TOPIC): cv.string,
+        vol.Optional(CONF_VOLUME_SET_TOPIC): cv.string,
+        vol.Optional(CONF_VOLUME_STEP): vol.Coerce(float),
+    }
+).extend(MQTT_ENTITY_COMMON_SCHEMA.schema)
+
+DISCOVERY_SCHEMA = PLATFORM_SCHEMA_MODERN.extend({}, extra=vol.REMOVE_EXTRA)
+
+
+async def async_setup_entry(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
+) -> None:
+    """Set up MQTT media player from a config entry."""
+    _LOGGER.debug(
+        "[mmb] media_player.async_setup_entry called (entry_id=%s)",
+        config_entry.entry_id,
+    )
+    mqtt_ready = await mqtt.async_wait_for_mqtt_client(hass)
+    if not mqtt_ready:
+        _LOGGER.warning(
+            "[mmb] MQTT client not ready inside media_player platform (entry_id=%s)",
+            config_entry.entry_id,
+        )
+        return
+    _LOGGER.debug(
+        "[mmb] MQTT client ready for media_player platform (entry_id=%s)",
+        config_entry.entry_id,
+    )
+
+    # Get discovery payload from config entry data
+    discovery_payload = config_entry.data.get("discovery_payload", {})
+    discovery_topic = config_entry.data.get("discovery_topic")
+
+    if not discovery_payload:
+        _LOGGER.error(
+            "[mmb] No discovery payload in config entry (entry_id=%s)",
+            config_entry.entry_id,
+        )
+        return
+
+    # Validate through schema
+    try:
+        config = DISCOVERY_SCHEMA(discovery_payload)
+    except vol.Invalid as err:
+        _LOGGER.error(
+            "[mmb] Invalid discovery payload (entry_id=%s, error=%s)",
+            config_entry.entry_id,
+            err,
+        )
+        return
+
+    # Build discovery_data structure that MqttEntity expects
+    topic_parts = discovery_topic.split("/") if discovery_topic else []
+    node_id = topic_parts[2] if len(topic_parts) > 2 else ""
+    object_id = topic_parts[3] if len(topic_parts) > 3 else "mqtt"
+    discovery_id = f"{node_id} {object_id}" if node_id else object_id
+    discovery_hash = (MEDIA_PLAYER_DOMAIN, discovery_id)
+
+    discovery_data = {
+        ATTR_DISCOVERY_HASH: discovery_hash,
+        ATTR_DISCOVERY_PAYLOAD: discovery_payload,
+        ATTR_DISCOVERY_TOPIC: discovery_topic,
+    }
+
+    _LOGGER.debug(
+        "[mmb] Creating entity directly (entry_id=%s, discovery_hash=%s)",
+        config_entry.entry_id,
+        discovery_hash,
+    )
+
+    # Create entity directly - no global signal mechanism
+    async_add_entities([MqttMediaPlayer(hass, config, config_entry, discovery_data)])
+
+
+class MqttMediaPlayer(MqttEntity, MediaPlayerEntity):
+    """Representation of a MQTT media player."""
+
+    _default_name = DEFAULT_NAME
+    _entity_id_format = media_player.ENTITY_ID_FORMAT
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        config: ConfigType,
+        config_entry: ConfigEntry,
+        discovery_data: DiscoveryInfoType | None,
+    ) -> None:
+        """Initialize the MQTT media player."""
+        _LOGGER.debug("MqttMediaPlayer.__init__ called with config: %s", config)
+
+        # Log the MRO to understand the class hierarchy
+        _LOGGER.debug("[mmb MRO] %s", [c.__name__ for c in self.__class__.__mro__])
+
+        # Initialize the base MqttEntity with discovery data
+        super().__init__(hass, config, config_entry, discovery_data)
+
+        self._mmb_entry_id = config_entry.entry_id
+        self._mmb_discovery_present = discovery_data is not None
+        config_keys = sorted(config.keys()) if isinstance(config, dict) else []
+        _LOGGER.debug(
+            "[mmb] MqttMediaPlayer init (entry_id=%s, entity_id=%s, discovery=%s, config_keys=%s)",
+            self._mmb_entry_id,
+            getattr(self, "entity_id", None),
+            self._mmb_discovery_present,
+            config_keys,
+        )
+
+        # Check the type of _attr_media_title after super().__init__
+        attr_type = type(self.__class__.__dict__.get("_attr_media_title", "NOT_IN_DICT")).__name__
+        _LOGGER.debug("[mmb INIT] _attr_media_title type in class: %s", attr_type)
+
+        _LOGGER.debug("MqttMediaPlayer initialized successfully")
+
+    @staticmethod
+    def config_schema() -> vol.Schema:
+        """Return the config schema."""
+        return DISCOVERY_SCHEMA
+
+    def _log_identity(self) -> str:
+        """Return a stable identifier for log messages."""
+
+        if getattr(self, "entity_id", None):
+            return self.entity_id
+        if getattr(self, "unique_id", None):
+            return f"unique_id={self.unique_id}"
+        return f"entry_id={self._mmb_entry_id}"
+
+    def _setup_from_config(self, config: ConfigType) -> None:
+        """(Re)Setup the entity."""
+        _LOGGER.debug("MqttMediaPlayer _setup_from_config called with config: %s", config)
+
+        # Store previous features if they exist (for change detection)
+        previous_features = None
+        if hasattr(self, "_attr_supported_features"):
+            previous_features = self._attr_supported_features
+
+        # Calculate new features
+        features = MediaPlayerEntityFeature(0)
+        feature_topics = []
+
+        source_list = self._config.get(CONF_SOURCE_LIST)
+        if source_list is not None:
+            self._attr_source_list = source_list
+        else:
+            _clear_attr(self, "_attr_source_list")
+
+        sound_mode_list = self._config.get(CONF_SOUND_MODE_LIST)
+        if sound_mode_list is not None:
+            self._attr_sound_mode_list = sound_mode_list
+        else:
+            _clear_attr(self, "_attr_sound_mode_list")
+
+        volume_step = self._config.get(CONF_VOLUME_STEP)
+        if volume_step is not None:
+            self._attr_volume_step = volume_step
+        else:
+            _clear_attr(self, "_attr_volume_step")
+
+        if self._config.get(CONF_PLAY_TOPIC):
+            features |= MediaPlayerEntityFeature.PLAY
+            feature_topics.append("PLAY")
+        if self._config.get(CONF_PAUSE_TOPIC):
+            features |= MediaPlayerEntityFeature.PAUSE
+            feature_topics.append("PAUSE")
+        if self._config.get(CONF_STOP_TOPIC):
+            features |= MediaPlayerEntityFeature.STOP
+            feature_topics.append("STOP")
+        if self._config.get(CONF_PREVIOUS_TRACK_TOPIC):
+            features |= MediaPlayerEntityFeature.PREVIOUS_TRACK
+            feature_topics.append("PREVIOUS_TRACK")
+        if self._config.get(CONF_NEXT_TRACK_TOPIC):
+            features |= MediaPlayerEntityFeature.NEXT_TRACK
+            feature_topics.append("NEXT_TRACK")
+        if self._config.get(CONF_TURN_ON_TOPIC):
+            features |= MediaPlayerEntityFeature.TURN_ON
+            feature_topics.append("TURN_ON")
+        if self._config.get(CONF_TURN_OFF_TOPIC):
+            features |= MediaPlayerEntityFeature.TURN_OFF
+            feature_topics.append("TURN_OFF")
+        if self._config.get(CONF_PLAY_MEDIA_TOPIC):
+            features |= MediaPlayerEntityFeature.PLAY_MEDIA
+            feature_topics.append("PLAY_MEDIA")
+        if self._config.get(CONF_SEEK_TOPIC):
+            features |= MediaPlayerEntityFeature.SEEK
+            feature_topics.append("SEEK")
+        if self._config.get(CONF_SELECT_SOURCE_TOPIC):
+            features |= MediaPlayerEntityFeature.SELECT_SOURCE
+            feature_topics.append("SELECT_SOURCE")
+        if self._config.get(CONF_SELECT_SOUND_MODE_TOPIC):
+            features |= MediaPlayerEntityFeature.SELECT_SOUND_MODE
+            feature_topics.append("SELECT_SOUND_MODE")
+        if self._config.get(CONF_VOLUME_SET_TOPIC):
+            features |= MediaPlayerEntityFeature.VOLUME_SET
+            feature_topics.append("VOLUME_SET")
+            if volume_step is not None:
+                features |= MediaPlayerEntityFeature.VOLUME_STEP
+                feature_topics.append("VOLUME_STEP")
+        if self._config.get(CONF_VOLUME_MUTE_COMMAND_TOPIC):
+            features |= MediaPlayerEntityFeature.VOLUME_MUTE
+            feature_topics.append("VOLUME_MUTE")
+        if self._config.get(CONF_SHUFFLE_SET_TOPIC):
+            features |= MediaPlayerEntityFeature.SHUFFLE_SET
+            feature_topics.append("SHUFFLE_SET")
+        if self._config.get(CONF_REPEAT_SET_TOPIC):
+            features |= MediaPlayerEntityFeature.REPEAT_SET
+            feature_topics.append("REPEAT_SET")
+
+        # Check if features have changed
+        if previous_features is not None and previous_features != features:
+            _LOGGER.debug(
+                "🔄 Features changed for %s: %s",
+                self.entity_id if hasattr(self, "entity_id") else "entity",
+                ", ".join(feature_topics) if feature_topics else "none",
+            )
+
+        self._attr_supported_features = features
+        _LOGGER.debug(
+            "MqttMediaPlayer setup completed with features: %s (%s)",
+            features,
+            ", ".join(feature_topics),
+        )
+        _LOGGER.debug(
+            "[mmb] %s supported_features=%s topics=%s",
+            self._log_identity(),
+            features,
+            feature_topics or "<none>",
+        )
+
+    async def async_added_to_hass(self) -> None:
+        """Called when entity is added to hass."""
+        _LOGGER.debug("MqttMediaPlayer.async_added_to_hass called for entity: %s", self.entity_id)
+        try:
+            await super().async_added_to_hass()
+            _LOGGER.debug(
+                "MqttMediaPlayer.async_added_to_hass completed successfully for entity: %s",
+                self.entity_id,
+            )
+        except Exception:
+            _LOGGER.exception(
+                "Error in MqttMediaPlayer.async_added_to_hass for entity %s",
+                self.entity_id,
+            )
+            raise
+
+    def _decode_payload(self, payload) -> str | None:
+        """Decode MQTT payload to string."""
+        if payload is None:
+            return None
+        if isinstance(payload, bytes):
+            return payload.decode("utf-8")
+        if isinstance(payload, bytearray):
+            return payload.decode("utf-8")
+        if isinstance(payload, memoryview):
+            return payload.tobytes().decode("utf-8")
+        return str(payload)
+
+    def _decode_bool_payload(self, payload: str | None) -> bool | None:
+        """Decode a string payload into a boolean state."""
+        if payload is None:
+            return None
+        normalized = payload.strip().lower()
+        if normalized == "":
+            return None
+        if normalized in ("true", "1", "yes", "on"):
+            return True
+        if normalized in ("false", "0", "no", "off"):
+            return False
+        _LOGGER.warning("Unexpected boolean payload received: %r. Ignoring.", payload)
+        return None
+
+    def _is_data_uri_image(self, url: str | None) -> bool:
+        """Check if URL is an image data URI."""
+        if not url:
+            return False
+        return DATA_URI_IMAGE_PATTERN.match(url) is not None
+
+    def _truncate_url_for_logging(self, url: str | None, max_length: int = 100) -> str:
+        """Truncate URL for safe logging, especially for data URIs."""
+        if not url:
+            return "None"
+        if len(url) <= max_length:
+            return url
+        # For data URIs, show the prefix and indicate truncation
+        if self._is_data_uri_image(url):
+            prefix_match = DATA_URI_IMAGE_PATTERN.match(url)
+            if prefix_match:
+                prefix = prefix_match.group(0)  # e.g., "data:image/png;base64"
+                return f"{prefix}...[truncated {len(url)} chars total]"
+        # For regular URLs, just truncate
+        return f"{url[:max_length]}...[truncated {len(url)} chars total]"
+
+    @callback
+    def _prepare_subscribe_topics(self) -> None:
+        """(Re)Subscribe to topics."""
+        _LOGGER.debug(
+            "MqttMediaPlayer._prepare_subscribe_topics called for entity: %s",
+            self.entity_id,
+        )
+        _LOGGER.debug("Config keys available: %s", list(self._config.keys()))
+
+        # Log all available topics from config
+        all_topic_configs = [
+            (CONF_STATE_TOPIC, "state"),
+            (CONF_VOLUME_LEVEL_TOPIC, "volume_level"),
+            (CONF_VOLUME_MUTE_STATE_TOPIC, "volume_mute_state"),
+            (CONF_SHUFFLE_STATE_TOPIC, "shuffle_state"),
+            (CONF_REPEAT_STATE_TOPIC, "repeat_state"),
+            (CONF_MEDIA_TITLE_TOPIC, "media_title"),
+            (CONF_MEDIA_ARTIST_TOPIC, "media_artist"),
+            (CONF_MEDIA_ALBUM_NAME_TOPIC, "media_album"),
+            (CONF_MEDIA_DURATION_TOPIC, "media_duration"),
+            (CONF_MEDIA_POSITION_TOPIC, "media_position"),
+            (CONF_MEDIA_IMAGE_URL_TOPIC, "media_image_url"),
+            (
+                CONF_MEDIA_IMAGE_REMOTELY_ACCESSIBLE_TOPIC,
+                "media_image_remotely_accessible",
+            ),
+        ]
+
+        _LOGGER.debug("=== ALL TOPIC CONFIGURATIONS ===")
+        for topic_key, topic_name in all_topic_configs:
+            topic_value = self._config.get(topic_key)
+            _LOGGER.debug("  %s (%s): %s", topic_name, topic_key, topic_value)
+        _LOGGER.debug("=== END TOPIC CONFIGURATIONS ===")
+
+        configured_topics = {
+            topic_name: self._config.get(topic_key)
+            for topic_key, topic_name in all_topic_configs
+            if self._config.get(topic_key)
+        }
+        _LOGGER.debug(
+            "[mmb] %s preparing MQTT subscriptions (configured_topics=%s)",
+            self._log_identity(),
+            configured_topics or "<none>",
+        )
+        self._prepare_playback_subscriptions()
+        self._prepare_mode_subscriptions()
+        self._prepare_media_info_subscriptions()
+        self._prepare_timing_subscriptions()
+        self._prepare_image_subscriptions()
+
+        # Final summary
+        _LOGGER.debug("🎯 SUBSCRIPTION SETUP COMPLETED for entity: %s", self.entity_id)
+        _LOGGER.debug(
+            "📊 Total subscriptions object state: %s",
+            len(getattr(self, "_subscriptions", {})),
+        )
+
+    def _prepare_playback_subscriptions(self) -> None:
+        """Prepare state, volume, and mute topic subscriptions."""
+
+        @callback
+        def state_message_received(msg: ReceiveMessage) -> None:
+            """Handle new MQTT state messages."""
+            _LOGGER.debug("🔥 STATE MESSAGE RECEIVED on topic %s: %s", msg.topic, msg.payload)
+
+            state_str = self._decode_payload(msg.payload)
+            if not state_str:
+                _LOGGER.debug("Empty state payload received, ignoring")
+                return
+
+            # Normalize to lowercase once
+            state_str = state_str.lower()
+
+            # Handle HA special cases first
+            if state_str == STATE_UNAVAILABLE:
+                self._attr_available = False
+                self.async_write_ha_state()
+                _LOGGER.debug("✅ Marked entity unavailable due to MQTT payload")
+                return
+
+            self._attr_available = True
+
+            if state_str == STATE_UNKNOWN:
+                self._attr_state = cast(MediaPlayerState, STATE_UNKNOWN)
+                self.async_write_ha_state()
+                _LOGGER.debug("✅ State marked as unknown from MQTT payload")
+                return
+
+            try:
+                new_state = MediaPlayerState(state_str)
+            except ValueError:
+                _LOGGER.warning("Invalid media player state received: %s. Ignoring.", state_str)
+                return
+
+            self._attr_state = new_state
+            self.async_write_ha_state()
+            _LOGGER.debug("✅ State updated to: %s", self._attr_state)
+            _LOGGER.debug(
+                "[mmb] %s state update (topic=%s, payload=%s, state=%s)",
+                self._log_identity(),
+                msg.topic,
+                state_str,
+                self._attr_state,
+            )
+
+        state_topic = self._config.get(CONF_STATE_TOPIC)
+        _LOGGER.debug("📡 SUBSCRIBING TO STATE TOPIC: %s", state_topic)
+        if state_topic:
+            success = self.add_subscription(CONF_STATE_TOPIC, state_message_received, {"_attr_state"})
+            # Defensive: add_subscription is from HA's MqttEntity and currently can't
+            # fail if topic is truthy, but we guard against future API changes.
+            if not success:
+                _LOGGER.error("Failed to subscribe to state topic: %s", state_topic)
+                raise RuntimeError(f"Failed to subscribe to state topic: {state_topic}")
+            _LOGGER.debug(
+                "[mmb] %s subscribed to state topic=%s",
+                self._log_identity(),
+                state_topic,
+            )
+        else:
+            _LOGGER.debug("❌ No state topic configured, skipping state subscription")
+
+        @callback
+        def volume_level_received(msg: ReceiveMessage) -> None:
+            """Handle new MQTT volume level messages."""
+            _LOGGER.debug("🔊 VOLUME MESSAGE RECEIVED on topic %s: %s", msg.topic, msg.payload)
+
+            payload_str = self._decode_payload(msg.payload)
+            if not payload_str:
+                _LOGGER.debug("Empty volume payload received, ignoring")
+                return
+
+            try:
+                volume = float(payload_str)
+            except (ValueError, TypeError) as e:
+                _LOGGER.warning(
+                    "Invalid volume level format received: %s, error: %s",
+                    msg.payload,
+                    e,
+                )
+                return
+
+            # Validate volume is in range 0.0 to 1.0
+            if not 0.0 <= volume <= 1.0:
+                _LOGGER.warning("Volume level out of range: %s. Must be between 0.0 and 1.0", volume)
+                return
+
+            self._attr_volume_level = volume
+            self.async_write_ha_state()
+            _LOGGER.debug("✅ Volume updated to: %s", self._attr_volume_level)
+            _LOGGER.debug(
+                "[mmb] %s volume update (topic=%s, payload=%s, volume=%.3f)",
+                self._log_identity(),
+                msg.topic,
+                payload_str,
+                self._attr_volume_level,
+            )
+
+        volume_topic = self._config.get(CONF_VOLUME_LEVEL_TOPIC)
+        _LOGGER.debug("📡 SUBSCRIBING TO VOLUME TOPIC: %s", volume_topic)
+        if volume_topic:
+            success = self.add_subscription(CONF_VOLUME_LEVEL_TOPIC, volume_level_received, {"_attr_volume_level"})
+            if not success:
+                _LOGGER.error("Failed to subscribe to volume topic: %s", volume_topic)
+                raise RuntimeError(f"Failed to subscribe to volume topic: {volume_topic}")
+            _LOGGER.debug(
+                "[mmb] %s subscribed to volume topic=%s",
+                self._log_identity(),
+                volume_topic,
+            )
+        else:
+            _LOGGER.debug("❌ No volume topic configured, skipping volume subscription")
+
+        @callback
+        def volume_mute_received(msg: ReceiveMessage) -> None:
+            """Handle new MQTT mute state messages."""
+            _LOGGER.debug("🔇 MUTE MESSAGE RECEIVED on topic %s: %s", msg.topic, msg.payload)
+
+            payload_str = self._decode_payload(msg.payload)
+            muted = self._decode_bool_payload(payload_str)
+            if muted is None:
+                _LOGGER.debug("Empty mute payload received, ignoring")
+                return
+
+            self._attr_is_volume_muted = muted
+            self.async_write_ha_state()
+            _LOGGER.debug("✅ Muted updated to: %s", self._attr_is_volume_muted)
+            _LOGGER.debug(
+                "[mmb] %s mute update (topic=%s, payload=%s, muted=%s)",
+                self._log_identity(),
+                msg.topic,
+                payload_str,
+                self._attr_is_volume_muted,
+            )
+
+        mute_state_topic = self._config.get(CONF_VOLUME_MUTE_STATE_TOPIC)
+        _LOGGER.debug("📡 SUBSCRIBING TO MUTE STATE TOPIC: %s", mute_state_topic)
+        if mute_state_topic:
+            success = self.add_subscription(
+                CONF_VOLUME_MUTE_STATE_TOPIC,
+                volume_mute_received,
+                {"_attr_is_volume_muted"},
+            )
+            if not success:
+                _LOGGER.error("Failed to subscribe to mute state topic: %s", mute_state_topic)
+                raise RuntimeError(f"Failed to subscribe to mute state topic: {mute_state_topic}")
+            _LOGGER.debug(
+                "[mmb] %s subscribed to mute_state topic=%s",
+                self._log_identity(),
+                mute_state_topic,
+            )
+        else:
+            _LOGGER.debug("❌ No mute state topic configured, skipping mute subscription")
+
+    def _prepare_mode_subscriptions(self) -> None:
+        """Prepare shuffle and repeat topic subscriptions."""
+
+        @callback
+        def shuffle_state_received(msg: ReceiveMessage) -> None:
+            """Handle new MQTT shuffle state messages."""
+            _LOGGER.debug("🔀 SHUFFLE MESSAGE RECEIVED on topic %s: %s", msg.topic, msg.payload)
+
+            payload_str = self._decode_payload(msg.payload)
+            shuffle = self._decode_bool_payload(payload_str)
+            if shuffle is None:
+                _LOGGER.debug("Empty shuffle payload received, ignoring")
+                return
+
+            self._attr_shuffle = shuffle
+            self.async_write_ha_state()
+            _LOGGER.debug("✅ Shuffle updated to: %s", self._attr_shuffle)
+            _LOGGER.debug(
+                "[mmb] %s shuffle update (topic=%s, payload=%s, shuffle=%s)",
+                self._log_identity(),
+                msg.topic,
+                payload_str,
+                self._attr_shuffle,
+            )
+
+        shuffle_state_topic = self._config.get(CONF_SHUFFLE_STATE_TOPIC)
+        _LOGGER.debug("📡 SUBSCRIBING TO SHUFFLE STATE TOPIC: %s", shuffle_state_topic)
+        if shuffle_state_topic:
+            success = self.add_subscription(
+                CONF_SHUFFLE_STATE_TOPIC,
+                shuffle_state_received,
+                {"_attr_shuffle"},
+            )
+            if not success:
+                _LOGGER.error(
+                    "Failed to subscribe to shuffle state topic: %s",
+                    shuffle_state_topic,
+                )
+                raise RuntimeError(f"Failed to subscribe to shuffle state topic: {shuffle_state_topic}")
+            _LOGGER.debug(
+                "[mmb] %s subscribed to shuffle_state topic=%s",
+                self._log_identity(),
+                shuffle_state_topic,
+            )
+        else:
+            _LOGGER.debug("❌ No shuffle state topic configured, skipping shuffle subscription")
+
+        @callback
+        def repeat_state_received(msg: ReceiveMessage) -> None:
+            """Handle new MQTT repeat state messages."""
+            _LOGGER.debug("🔁 REPEAT MESSAGE RECEIVED on topic %s: %s", msg.topic, msg.payload)
+
+            payload_str = self._decode_payload(msg.payload)
+            if payload_str is None:
+                _LOGGER.debug("Empty repeat payload received, ignoring")
+                return
+
+            try:
+                repeat = RepeatMode(payload_str.lower())
+            except ValueError:
+                _LOGGER.warning("Invalid repeat mode received: %s. Ignoring.", payload_str)
+                return
+
+            self._attr_repeat = repeat
+            self.async_write_ha_state()
+            _LOGGER.debug("✅ Repeat updated to: %s", self._attr_repeat)
+            _LOGGER.debug(
+                "[mmb] %s repeat update (topic=%s, payload=%s, repeat=%s)",
+                self._log_identity(),
+                msg.topic,
+                payload_str,
+                self._attr_repeat,
+            )
+
+        repeat_state_topic = self._config.get(CONF_REPEAT_STATE_TOPIC)
+        _LOGGER.debug("📡 SUBSCRIBING TO REPEAT STATE TOPIC: %s", repeat_state_topic)
+        if repeat_state_topic:
+            success = self.add_subscription(
+                CONF_REPEAT_STATE_TOPIC,
+                repeat_state_received,
+                {"_attr_repeat"},
+            )
+            if not success:
+                _LOGGER.error("Failed to subscribe to repeat state topic: %s", repeat_state_topic)
+                raise RuntimeError(f"Failed to subscribe to repeat state topic: {repeat_state_topic}")
+            _LOGGER.debug(
+                "[mmb] %s subscribed to repeat_state topic=%s",
+                self._log_identity(),
+                repeat_state_topic,
+            )
+        else:
+            _LOGGER.debug("❌ No repeat state topic configured, skipping repeat subscription")
+
+    def _prepare_media_info_subscriptions(self) -> None:
+        """Prepare media title, artist, and album topic subscriptions."""
+
+        @callback
+        def media_title_received(msg: ReceiveMessage) -> None:
+            """Handle new MQTT media title messages."""
+            _LOGGER.debug("🎵 TITLE MESSAGE RECEIVED on topic %s: %s", msg.topic, msg.payload)
+            self._attr_media_title = self._decode_payload(msg.payload)
+            self.async_write_ha_state()
+            _LOGGER.debug(
+                "[mmb] %s title update (topic=%s, title=%s)",
+                self._log_identity(),
+                msg.topic,
+                self._attr_media_title,
+            )
+
+        title_topic = self._config.get(CONF_MEDIA_TITLE_TOPIC)
+        _LOGGER.debug("📡 SUBSCRIBING TO TITLE TOPIC: %s", title_topic)
+        if title_topic:
+            success = self.add_subscription(CONF_MEDIA_TITLE_TOPIC, media_title_received, {"_attr_media_title"})
+            if not success:
+                _LOGGER.error("Failed to subscribe to title topic: %s", title_topic)
+                raise RuntimeError(f"Failed to subscribe to title topic: {title_topic}")
+            _LOGGER.debug(
+                "[mmb] %s subscribed to title topic=%s",
+                self._log_identity(),
+                title_topic,
+            )
+        else:
+            _LOGGER.debug("❌ No title topic configured, skipping title subscription")
+
+        @callback
+        def media_artist_received(msg: ReceiveMessage) -> None:
+            """Handle new MQTT media artist messages."""
+            _LOGGER.debug("🎤 ARTIST MESSAGE RECEIVED on topic %s: %s", msg.topic, msg.payload)
+            self._attr_media_artist = self._decode_payload(msg.payload)
+            self.async_write_ha_state()
+            _LOGGER.debug("✅ Media artist updated to: %s", self._attr_media_artist)
+            _LOGGER.debug(
+                "[mmb] %s artist update (topic=%s, artist=%s)",
+                self._log_identity(),
+                msg.topic,
+                self._attr_media_artist,
+            )
+
+        artist_topic = self._config.get(CONF_MEDIA_ARTIST_TOPIC)
+        _LOGGER.debug("📡 SUBSCRIBING TO ARTIST TOPIC: %s", artist_topic)
+        if artist_topic:
+            success = self.add_subscription(CONF_MEDIA_ARTIST_TOPIC, media_artist_received, {"_attr_media_artist"})
+            if not success:
+                _LOGGER.error("Failed to subscribe to artist topic: %s", artist_topic)
+                raise RuntimeError(f"Failed to subscribe to artist topic: {artist_topic}")
+            _LOGGER.debug(
+                "[mmb] %s subscribed to artist topic=%s",
+                self._log_identity(),
+                artist_topic,
+            )
+        else:
+            _LOGGER.debug("❌ No artist topic configured, skipping artist subscription")
+
+        @callback
+        def media_album_name_received(msg: ReceiveMessage) -> None:
+            """Handle new MQTT media album name messages."""
+            _LOGGER.debug("💿 ALBUM MESSAGE RECEIVED on topic %s: %s", msg.topic, msg.payload)
+            self._attr_media_album_name = self._decode_payload(msg.payload)
+            self.async_write_ha_state()
+            _LOGGER.debug("✅ Media album updated to: %s", self._attr_media_album_name)
+            _LOGGER.debug(
+                "[mmb] %s album update (topic=%s, album=%s)",
+                self._log_identity(),
+                msg.topic,
+                self._attr_media_album_name,
+            )
+
+        album_topic = self._config.get(CONF_MEDIA_ALBUM_NAME_TOPIC)
+        _LOGGER.debug("📡 SUBSCRIBING TO ALBUM TOPIC: %s", album_topic)
+        if album_topic:
+            success = self.add_subscription(
+                CONF_MEDIA_ALBUM_NAME_TOPIC,
+                media_album_name_received,
+                {"_attr_media_album_name"},
+            )
+            if not success:
+                _LOGGER.error("Failed to subscribe to album topic: %s", album_topic)
+                raise RuntimeError(f"Failed to subscribe to album topic: {album_topic}")
+            _LOGGER.debug(
+                "[mmb] %s subscribed to album topic=%s",
+                self._log_identity(),
+                album_topic,
+            )
+        else:
+            _LOGGER.debug("❌ No album topic configured, skipping album subscription")
+
+    def _prepare_timing_subscriptions(self) -> None:
+        """Prepare media duration and position topic subscriptions."""
+
+        @callback
+        def media_duration_received(msg: ReceiveMessage) -> None:
+            """Handle new MQTT media duration messages."""
+            _LOGGER.debug("⏱️ DURATION MESSAGE RECEIVED on topic %s: %s", msg.topic, msg.payload)
+
+            payload_str = self._decode_payload(msg.payload)
+            if not payload_str:
+                _LOGGER.debug("Empty duration payload received, ignoring")
+                return
+
+            try:
+                duration = int(payload_str)
+            except (ValueError, TypeError) as e:
+                _LOGGER.warning(
+                    "Invalid media duration format received: %s, error: %s",
+                    msg.payload,
+                    e,
+                )
+                return
+
+            # Validate duration is non-negative
+            if duration < 0:
+                _LOGGER.warning("Media duration cannot be negative: %s", duration)
+                return
+
+            self._attr_media_duration = duration
+            self.async_write_ha_state()
+            _LOGGER.debug("✅ Media duration updated to: %s", self._attr_media_duration)
+            _LOGGER.debug(
+                "[mmb] %s duration update (topic=%s, payload=%s, duration=%s)",
+                self._log_identity(),
+                msg.topic,
+                payload_str,
+                self._attr_media_duration,
+            )
+
+        duration_topic = self._config.get(CONF_MEDIA_DURATION_TOPIC)
+        _LOGGER.debug("📡 SUBSCRIBING TO DURATION TOPIC: %s", duration_topic)
+        if duration_topic:
+            success = self.add_subscription(
+                CONF_MEDIA_DURATION_TOPIC,
+                media_duration_received,
+                {"_attr_media_duration"},
+            )
+            if not success:
+                _LOGGER.error("Failed to subscribe to duration topic: %s", duration_topic)
+                raise RuntimeError(f"Failed to subscribe to duration topic: {duration_topic}")
+            _LOGGER.debug(
+                "[mmb] %s subscribed to duration topic=%s",
+                self._log_identity(),
+                duration_topic,
+            )
+        else:
+            _LOGGER.debug("❌ No duration topic configured, skipping duration subscription")
+
+        @callback
+        def media_position_received(msg: ReceiveMessage) -> None:
+            """Handle new MQTT media position messages."""
+            _LOGGER.debug("⏲️ POSITION MESSAGE RECEIVED on topic %s: %s", msg.topic, msg.payload)
+
+            payload_str = self._decode_payload(msg.payload)
+            if not payload_str:
+                _LOGGER.debug("Empty position payload received, ignoring")
+                return
+
+            try:
+                position = int(payload_str)
+            except (ValueError, TypeError) as e:
+                _LOGGER.warning(
+                    "Invalid media position format received: %s, error: %s",
+                    msg.payload,
+                    e,
+                )
+                return
+
+            # Validate position is non-negative
+            if position < 0:
+                _LOGGER.warning("Media position cannot be negative: %s", position)
+                return
+
+            self._attr_media_position = position
+            self._attr_media_position_updated_at = utcnow()
+            self.async_write_ha_state()
+            _LOGGER.debug("✅ Media position updated to: %s", self._attr_media_position)
+            _LOGGER.debug(
+                "[mmb] %s position update (topic=%s, payload=%s, position=%s)",
+                self._log_identity(),
+                msg.topic,
+                payload_str,
+                self._attr_media_position,
+            )
+
+        position_topic = self._config.get(CONF_MEDIA_POSITION_TOPIC)
+        _LOGGER.debug("📡 SUBSCRIBING TO POSITION TOPIC: %s", position_topic)
+        if position_topic:
+            success = self.add_subscription(
+                CONF_MEDIA_POSITION_TOPIC,
+                media_position_received,
+                {"_attr_media_position"},
+            )
+            if not success:
+                _LOGGER.error("Failed to subscribe to position topic: %s", position_topic)
+                raise RuntimeError(f"Failed to subscribe to position topic: {position_topic}")
+            _LOGGER.debug(
+                "[mmb] %s subscribed to position topic=%s",
+                self._log_identity(),
+                position_topic,
+            )
+        else:
+            _LOGGER.debug("❌ No position topic configured, skipping position subscription")
+
+    def _prepare_image_subscriptions(self) -> None:
+        """Prepare media image topic subscriptions."""
+
+        @callback
+        def media_image_url_received(msg: ReceiveMessage) -> None:
+            """Handle new MQTT media image url messages."""
+            payload_for_log = self._truncate_url_for_logging(self._decode_payload(msg.payload))
+            _LOGGER.debug(
+                "🖼️ IMAGE URL MESSAGE RECEIVED on topic %s: %s",
+                msg.topic,
+                payload_for_log,
+            )
+            image_url = self._decode_payload(msg.payload)
+            self._attr_media_image_url = image_url
+
+            # Auto-detect data URIs and mark them as remotely accessible
+            if self._is_data_uri_image(image_url):
+                self._attr_media_image_remotely_accessible = True
+                _LOGGER.debug("📊 Detected data URI image, setting remotely_accessible=True")
+
+            self.async_write_ha_state()
+            url_for_log = self._truncate_url_for_logging(self._attr_media_image_url)
+            _LOGGER.debug("✅ Media image URL updated to: %s", url_for_log)
+            _LOGGER.debug(
+                "[mmb] %s image_url update (topic=%s, url=%s)",
+                self._log_identity(),
+                msg.topic,
+                url_for_log,
+            )
+
+        image_url_topic = self._config.get(CONF_MEDIA_IMAGE_URL_TOPIC)
+        _LOGGER.debug("📡 SUBSCRIBING TO IMAGE URL TOPIC: %s", image_url_topic)
+        if image_url_topic:
+            success = self.add_subscription(
+                CONF_MEDIA_IMAGE_URL_TOPIC,
+                media_image_url_received,
+                {"_attr_media_image_url"},
+            )
+            if not success:
+                _LOGGER.error("Failed to subscribe to image URL topic: %s", image_url_topic)
+                raise RuntimeError(f"Failed to subscribe to image URL topic: {image_url_topic}")
+            _LOGGER.debug(
+                "[mmb] %s subscribed to image_url topic=%s",
+                self._log_identity(),
+                image_url_topic,
+            )
+        else:
+            _LOGGER.debug("❌ No image URL topic configured, skipping image URL subscription")
+
+        @callback
+        def media_image_remotely_accessible_received(msg: ReceiveMessage) -> None:
+            """Handle new MQTT media image remotely accessible messages."""
+            _LOGGER.debug(
+                "🌐 IMAGE REMOTELY ACCESSIBLE MESSAGE RECEIVED on topic %s: %s",
+                msg.topic,
+                msg.payload,
+            )
+            payload_str = self._decode_payload(msg.payload)
+            # Convert string payload to boolean
+            if payload_str is not None:
+                self._attr_media_image_remotely_accessible = payload_str.lower() in (
+                    "true",
+                    "1",
+                    "yes",
+                    "on",
+                )
+                self.async_write_ha_state()
+                _LOGGER.debug(
+                    "✅ Media image remotely accessible updated to: %s",
+                    self._attr_media_image_remotely_accessible,
+                )
+                _LOGGER.debug(
+                    "[mmb] %s image_accessible update (topic=%s, payload=%s, accessible=%s)",
+                    self._log_identity(),
+                    msg.topic,
+                    payload_str,
+                    self._attr_media_image_remotely_accessible,
+                )
+
+        image_accessible_topic = self._config.get(CONF_MEDIA_IMAGE_REMOTELY_ACCESSIBLE_TOPIC)
+        _LOGGER.debug(
+            "📡 SUBSCRIBING TO IMAGE REMOTELY ACCESSIBLE TOPIC: %s",
+            image_accessible_topic,
+        )
+        if image_accessible_topic:
+            success = self.add_subscription(
+                CONF_MEDIA_IMAGE_REMOTELY_ACCESSIBLE_TOPIC,
+                media_image_remotely_accessible_received,
+                {"_attr_media_image_remotely_accessible"},
+            )
+            if not success:
+                _LOGGER.error(
+                    "Failed to subscribe to image accessible topic: %s",
+                    image_accessible_topic,
+                )
+                raise RuntimeError(f"Failed to subscribe to image accessible topic: {image_accessible_topic}")
+            _LOGGER.debug(
+                "[mmb] %s subscribed to image_accessible topic=%s",
+                self._log_identity(),
+                image_accessible_topic,
+            )
+        else:
+            _LOGGER.debug("❌ No image remotely accessible topic configured, skipping subscription")
+
+    async def _subscribe_topics(self) -> None:
+        """(Re)Subscribe to topics."""
+
+        _LOGGER.debug("🔌 Actually subscribing to MQTT topics for entity: %s", self.entity_id)
+        async_subscribe_topics_internal(self.hass, self._sub_state)
+        _LOGGER.debug("✅ MQTT subscription completed for entity: %s", self.entity_id)
+        _LOGGER.debug(
+            "[mmb] %s MQTT topic subscription batch complete (subscriptions=%s)",
+            self._log_identity(),
+            list(getattr(self, "_subscriptions", {}).keys()),
+        )
+
+    async def async_media_play(self) -> None:
+        """Send a play command to the media player."""
+        topic = self._config.get(CONF_PLAY_TOPIC)
+        if not topic:
+            _LOGGER.warning("Play command called but no play topic configured")
+            return
+        _LOGGER.debug("🎵 Sending PLAY command to topic: %s", topic)
+        _LOGGER.debug("[mmb] %s publish PLAY (topic=%s)", self._log_identity(), topic)
+        try:
+            await mqtt.async_publish(self.hass, topic, "")
+        except Exception:
+            _LOGGER.exception("Failed to publish play command to topic %s", topic)
+
+    async def async_media_pause(self) -> None:
+        """Send a pause command to the media player."""
+        topic = self._config.get(CONF_PAUSE_TOPIC)
+        if not topic:
+            _LOGGER.warning("Pause command called but no pause topic configured")
+            return
+        _LOGGER.debug("⏸️ Sending PAUSE command to topic: %s", topic)
+        _LOGGER.debug("[mmb] %s publish PAUSE (topic=%s)", self._log_identity(), topic)
+        try:
+            await mqtt.async_publish(self.hass, topic, "")
+        except Exception:
+            _LOGGER.exception("Failed to publish pause command to topic %s", topic)
+
+    async def async_media_stop(self) -> None:
+        """Send a stop command to the media player."""
+        topic = self._config.get(CONF_STOP_TOPIC)
+        if not topic:
+            _LOGGER.warning("Stop command called but no stop topic configured")
+            return
+        _LOGGER.debug("⏹️ Sending STOP command to topic: %s", topic)
+        _LOGGER.debug("[mmb] %s publish STOP (topic=%s)", self._log_identity(), topic)
+        try:
+            await mqtt.async_publish(self.hass, topic, "")
+        except Exception:
+            _LOGGER.exception("Failed to publish stop command to topic %s", topic)
+
+    async def async_media_next_track(self) -> None:
+        """Send a next track command to the media player."""
+        topic = self._config.get(CONF_NEXT_TRACK_TOPIC)
+        if not topic:
+            _LOGGER.warning("Next track command called but no next track topic configured")
+            return
+        _LOGGER.debug("⏭️ Sending NEXT TRACK command to topic: %s", topic)
+        _LOGGER.debug("[mmb] %s publish NEXT (topic=%s)", self._log_identity(), topic)
+        try:
+            await mqtt.async_publish(self.hass, topic, "")
+        except Exception:
+            _LOGGER.exception("Failed to publish next track command to topic %s", topic)
+
+    async def async_media_previous_track(self) -> None:
+        """Send a previous track command to the media player."""
+        topic = self._config.get(CONF_PREVIOUS_TRACK_TOPIC)
+        if not topic:
+            _LOGGER.warning("Previous track command called but no previous track topic configured")
+            return
+        _LOGGER.debug("⏮️ Sending PREVIOUS TRACK command to topic: %s", topic)
+        _LOGGER.debug("[mmb] %s publish PREVIOUS (topic=%s)", self._log_identity(), topic)
+        try:
+            await mqtt.async_publish(self.hass, topic, "")
+        except Exception:
+            _LOGGER.exception("Failed to publish previous track command to topic %s", topic)
+
+    async def async_turn_on(self) -> None:
+        """Send a turn on command to the media player."""
+        topic = self._config.get(CONF_TURN_ON_TOPIC)
+        if not topic:
+            _LOGGER.warning("Turn on command called but no turn on topic configured")
+            return
+        _LOGGER.debug("🔌 Sending TURN ON command to topic: %s", topic)
+        _LOGGER.debug("[mmb] %s publish TURN_ON (topic=%s)", self._log_identity(), topic)
+        try:
+            await mqtt.async_publish(self.hass, topic, "")
+        except Exception:
+            _LOGGER.exception("Failed to publish turn on command to topic %s", topic)
+
+    async def async_turn_off(self) -> None:
+        """Send a turn off command to the media player."""
+        topic = self._config.get(CONF_TURN_OFF_TOPIC)
+        if not topic:
+            _LOGGER.warning("Turn off command called but no turn off topic configured")
+            return
+        _LOGGER.debug("🔌 Sending TURN OFF command to topic: %s", topic)
+        _LOGGER.debug("[mmb] %s publish TURN_OFF (topic=%s)", self._log_identity(), topic)
+        try:
+            await mqtt.async_publish(self.hass, topic, "")
+        except Exception:
+            _LOGGER.exception("Failed to publish turn off command to topic %s", topic)
+
+    async def async_set_volume_level(self, volume: float) -> None:
+        """Send a set volume level command to the media player."""
+        topic = self._config.get(CONF_VOLUME_SET_TOPIC)
+        if not topic:
+            _LOGGER.warning("Set volume level command called but no volume set topic configured")
+            return
+        payload = str(volume)
+        _LOGGER.debug(
+            "🔊 Sending SET VOLUME LEVEL command to topic: %s, payload: %s",
+            topic,
+            payload,
+        )
+        _LOGGER.debug(
+            "[mmb] %s publish VOLUME_SET (topic=%s, payload=%s)",
+            self._log_identity(),
+            topic,
+            payload,
+        )
+        try:
+            await mqtt.async_publish(self.hass, topic, payload)
+        except Exception:
+            _LOGGER.exception("Failed to publish volume level command to topic %s", topic)
+
+    async def async_mute_volume(self, mute: bool) -> None:
+        """Send a mute volume command to the media player."""
+        topic = self._config.get(CONF_VOLUME_MUTE_COMMAND_TOPIC)
+        if not topic:
+            _LOGGER.warning("Mute volume command called but no volume mute command topic configured")
+            return
+        payload = "ON" if mute else "OFF"
+        _LOGGER.debug("🔇 Sending MUTE VOLUME command to topic: %s, payload: %s", topic, payload)
+        _LOGGER.debug(
+            "[mmb] %s publish VOLUME_MUTE (topic=%s, payload=%s)",
+            self._log_identity(),
+            topic,
+            payload,
+        )
+        try:
+            await mqtt.async_publish(self.hass, topic, payload)
+        except Exception:
+            _LOGGER.exception("Failed to publish mute volume command to topic %s", topic)
+
+    async def async_play_media(self, media_type: str, media_id: str, **kwargs: Any) -> None:
+        """Send a play media command to the media player."""
+        topic = self._config.get(CONF_PLAY_MEDIA_TOPIC)
+        if not topic:
+            _LOGGER.warning("Play media command called but no play media topic configured")
+            return
+
+        payload_data: dict[str, str | bool] = {
+            "media_type": media_type,
+            "media_id": media_id,
+        }
+        enqueue = kwargs.get("enqueue")
+        if enqueue is not None:
+            payload_data["enqueue"] = getattr(enqueue, "value", str(enqueue))
+        announce = kwargs.get("announce")
+        if announce is not None:
+            payload_data["announce"] = bool(announce)
+        payload = json.dumps(payload_data)
+
+        _LOGGER.debug("🎬 Sending PLAY MEDIA command to topic: %s, payload: %s", topic, payload)
+        _LOGGER.debug(
+            "[mmb] %s publish PLAY_MEDIA (topic=%s, payload=%s)",
+            self._log_identity(),
+            topic,
+            payload,
+        )
+        try:
+            await mqtt.async_publish(self.hass, topic, payload)
+        except Exception:
+            _LOGGER.exception("Failed to publish play media command to topic %s", topic)
+
+    async def async_select_source(self, source: str) -> None:
+        """Send a select source command to the media player."""
+        topic = self._config.get(CONF_SELECT_SOURCE_TOPIC)
+        if not topic:
+            _LOGGER.warning("Select source command called but no select source topic configured")
+            return
+        _LOGGER.debug(
+            "📻 Sending SELECT SOURCE command to topic: %s, payload: %s",
+            topic,
+            source,
+        )
+        _LOGGER.debug(
+            "[mmb] %s publish SELECT_SOURCE (topic=%s, payload=%s)",
+            self._log_identity(),
+            topic,
+            source,
+        )
+        try:
+            await mqtt.async_publish(self.hass, topic, source)
+        except Exception:
+            _LOGGER.exception("Failed to publish select source command to topic %s", topic)
+
+    async def async_select_sound_mode(self, sound_mode: str) -> None:
+        """Send a select sound mode command to the media player."""
+        topic = self._config.get(CONF_SELECT_SOUND_MODE_TOPIC)
+        if not topic:
+            _LOGGER.warning("Select sound mode command called but no select sound mode topic configured")
+            return
+        _LOGGER.debug(
+            "🎚️ Sending SELECT SOUND MODE command to topic: %s, payload: %s",
+            topic,
+            sound_mode,
+        )
+        _LOGGER.debug(
+            "[mmb] %s publish SELECT_SOUND_MODE (topic=%s, payload=%s)",
+            self._log_identity(),
+            topic,
+            sound_mode,
+        )
+        try:
+            await mqtt.async_publish(self.hass, topic, sound_mode)
+        except Exception:
+            _LOGGER.exception(
+                "Failed to publish select sound mode command to topic %s",
+                topic,
+            )
+
+    async def async_set_shuffle(self, shuffle: bool) -> None:
+        """Send a shuffle command to the media player."""
+        topic = self._config.get(CONF_SHUFFLE_SET_TOPIC)
+        if not topic:
+            _LOGGER.warning("Shuffle command called but no shuffle set topic configured")
+            return
+        payload = "ON" if shuffle else "OFF"
+        _LOGGER.debug("🔀 Sending SHUFFLE command to topic: %s, payload: %s", topic, payload)
+        _LOGGER.debug(
+            "[mmb] %s publish SHUFFLE_SET (topic=%s, payload=%s)",
+            self._log_identity(),
+            topic,
+            payload,
+        )
+        try:
+            await mqtt.async_publish(self.hass, topic, payload)
+        except Exception:
+            _LOGGER.exception("Failed to publish shuffle command to topic %s", topic)
+
+    async def async_set_repeat(self, repeat: RepeatMode) -> None:
+        """Send a repeat command to the media player."""
+        topic = self._config.get(CONF_REPEAT_SET_TOPIC)
+        if not topic:
+            _LOGGER.warning("Repeat command called but no repeat set topic configured")
+            return
+        payload = repeat.value
+        _LOGGER.debug("🔁 Sending REPEAT command to topic: %s, payload: %s", topic, payload)
+        _LOGGER.debug(
+            "[mmb] %s publish REPEAT_SET (topic=%s, payload=%s)",
+            self._log_identity(),
+            topic,
+            payload,
+        )
+        try:
+            await mqtt.async_publish(self.hass, topic, payload)
+        except Exception:
+            _LOGGER.exception("Failed to publish repeat command to topic %s", topic)
+
+    async def async_media_seek(self, position: float) -> None:
+        """Send a seek command to the media player."""
+        topic = self._config.get(CONF_SEEK_TOPIC)
+        if not topic:
+            _LOGGER.warning("Seek command called but no seek topic configured")
+            return
+        payload = str(position)
+        _LOGGER.debug("⏩ Sending SEEK command to topic: %s, payload: %s", topic, payload)
+        _LOGGER.debug(
+            "[mmb] %s publish SEEK (topic=%s, payload=%s)",
+            self._log_identity(),
+            topic,
+            payload,
+        )
+        try:
+            await mqtt.async_publish(self.hass, topic, payload)
+        except Exception:
+            _LOGGER.exception("Failed to publish seek command to topic %s", topic)

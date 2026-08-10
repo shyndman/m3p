@@ -5,9 +5,15 @@
     "@shyndman"
   ],
   "config_flow": true,
-  "documentation": "https://github.com/shyndman/ha-mqtt-media-bridge",
-  "integration_type": "hub",
-  "iot_class": "cloud_polling",
-  "issue_tracker": "https://github.com/shyndman/ha-mqtt-media-bridge/issues",
-  "version": "0.1.0"
+  "dependencies": [
+    "mqtt"
+  ],
+  "documentation": "https://github.com/shyndman/mqtt_media_bridge",
+  "iot_class": "cloud_push",
+  "issue_tracker": "https://github.com/shyndman/mqtt_media_bridge/issues",
+  "mqtt": [
+    "homeassistant/media_player/#"
+  ],
+  "requirements": [],
+  "version": "0.0.0"
 }
