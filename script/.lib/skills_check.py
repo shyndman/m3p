@@ -38,7 +38,7 @@ BODY_MAX_LINES = 500
 # Identifiers that initialize.sh rewrites. Skills must use the <domain> and {ClassPrefix}
 # placeholders instead, otherwise template sync would overwrite an initialized repository
 # with the blueprint's own names.
-FORBIDDEN_IDENTIFIERS = ("ha_integration_domain", "IntegrationBlueprint")
+FORBIDDEN_IDENTIFIERS = ("mqtt_media_bridge", "MqttMedia")
 
 LINK_PATTERN = re.compile(r"\[[^\]]*\]\((?!https?:|mailto:|#)([^)]+)\)")
 

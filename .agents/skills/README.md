@@ -23,14 +23,6 @@ any of it in your own repository, see [`../README.md`](../README.md). This file 
 | [`ha-release`](ha-release/SKILL.md)                     | cutting a release, commit messages, changelog, release notes              |
 | [`blueprint-tooling`](blueprint-tooling/SKILL.md)       | validation scripts, hook scripts, dependencies, template sync             |
 
-<!-- blueprint-only:start -->
-
-`blueprint-skill-maintenance` covers maintaining this shipped set — the rule-versus-procedure seam, the catalogue
-duplication, and what to re-verify after a Home Assistant version bump. `initialize.sh` removes it when a project is
-initialised from the template, because it is only meaningful in the blueprint repository itself.
-
-<!-- blueprint-only:end -->
-
 ## Naming
 
 Two namespaces are in use, by topic rather than by origin:

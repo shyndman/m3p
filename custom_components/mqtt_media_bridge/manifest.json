@@ -1,0 +1,13 @@
+{
+  "domain": "mqtt_media_bridge",
+  "name": "MQTT Media Bridge",
+  "codeowners": [
+    "@shyndman"
+  ],
+  "config_flow": true,
+  "documentation": "https://github.com/shyndman/ha-mqtt-media-bridge",
+  "integration_type": "hub",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/shyndman/ha-mqtt-media-bridge/issues",
+  "version": "0.1.0"
+}

@@ -1,11 +1,11 @@
-"""Constants for ha_integration_domain."""
+"""Constants for mqtt_media_bridge."""
 
 from logging import Logger, getLogger
 
 LOGGER: Logger = getLogger(__package__)
 
 # Integration metadata
-DOMAIN = "ha_integration_domain"
+DOMAIN = "mqtt_media_bridge"
 ATTRIBUTION = "Data provided by http://jsonplaceholder.typicode.com/"
 
 # Platform parallel updates - applied to all platforms

@@ -57,10 +57,10 @@ file being edited, so nothing loads automatically. Every skill therefore names t
 Files here use generic placeholders instead of this project's concrete identifiers, so template sync can update them
 without clobbering an initialized repository:
 
-| Placeholder     | Means                                                            | Example in this repo    |
-| --------------- | ---------------------------------------------------------------- | ----------------------- |
-| `<domain>`      | the integration domain, i.e. the `DOMAIN` constant in `const.py` | `ha_integration_domain` |
-| `{ClassPrefix}` | the class name prefix used by every integration class            | `IntegrationBlueprint`  |
+| Placeholder     | Means                                                            | Example in this repo |
+| --------------- | ---------------------------------------------------------------- | -------------------- |
+| `<domain>`      | the integration domain, i.e. the `DOMAIN` constant in `const.py` | `mqtt_media_bridge`  |
+| `{ClassPrefix}` | the class name prefix used by every integration class            | `MqttMedia`          |
 
 Substitute them mentally against `const.py` and `manifest.json`; never write them literally into code.
 

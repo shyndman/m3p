@@ -1,5 +1,5 @@
 """
-Custom integration to integrate ha_integration_domain with Home Assistant.
+Custom integration to integrate mqtt_media_bridge with Home Assistant.
 
 This integration demonstrates best practices for:
 - Config flow setup (user, reconfigure, reauth)
@@ -10,7 +10,7 @@ This integration demonstrates best practices for:
 - Proper error handling and recovery
 
 For more details about this integration, please refer to:
-https://github.com/jpawlowski/hacs.integration_blueprint
+https://github.com/shyndman/ha-mqtt-media-bridge
 
 For integration development guidelines:
 https://developers.home-assistant.io/docs/creating_integration_manifest
@@ -26,16 +26,16 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 import homeassistant.helpers.config_validation as cv
 from homeassistant.loader import async_get_loaded_integration
 
-from .api import IntegrationBlueprintApiClient
+from .api import MqttMediaApiClient
 from .const import DOMAIN, LOGGER
-from .coordinator import IntegrationBlueprintDataUpdateCoordinator
-from .data import IntegrationBlueprintData
+from .coordinator import MqttMediaDataUpdateCoordinator
+from .data import MqttMediaData
 from .service_actions import async_setup_services
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
-    from .data import IntegrationBlueprintConfigEntry
+    from .data import MqttMediaConfigEntry
 
 PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
@@ -79,7 +79,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: IntegrationBlueprintConfigEntry,
+    entry: MqttMediaConfigEntry,
 ) -> bool:
     """
     Set up this integration using UI.
@@ -113,14 +113,14 @@ async def async_setup_entry(
     https://developers.home-assistant.io/docs/config_entries_index/#setting-up-an-entry
     """
     # Initialize client first
-    client = IntegrationBlueprintApiClient(
+    client = MqttMediaApiClient(
         username=entry.data[CONF_USERNAME],  # From config flow setup
         password=entry.data[CONF_PASSWORD],  # From config flow setup
         session=async_get_clientsession(hass),
     )
 
     # Initialize coordinator with config_entry
-    coordinator = IntegrationBlueprintDataUpdateCoordinator(
+    coordinator = MqttMediaDataUpdateCoordinator(
         hass=hass,
         logger=LOGGER,
         name=DOMAIN,
@@ -130,7 +130,7 @@ async def async_setup_entry(
     )
 
     # Store runtime data
-    entry.runtime_data = IntegrationBlueprintData(
+    entry.runtime_data = MqttMediaData(
         client=client,
         integration=async_get_loaded_integration(hass, entry.domain),
         coordinator=coordinator,
@@ -147,7 +147,7 @@ async def async_setup_entry(
 
 async def async_unload_entry(
     hass: HomeAssistant,
-    entry: IntegrationBlueprintConfigEntry,
+    entry: MqttMediaConfigEntry,
 ) -> bool:
     """
     Unload a config entry.
@@ -173,7 +173,7 @@ async def async_unload_entry(
 
 async def async_reload_entry(
     hass: HomeAssistant,
-    entry: IntegrationBlueprintConfigEntry,
+    entry: MqttMediaConfigEntry,
 ) -> None:
     """
     Reload config entry.
