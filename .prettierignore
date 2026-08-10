@@ -1,0 +1,15 @@
+# Generated/runtime files (ignored by .gitignore but explicit here)
+config/
+!config/configuration.yaml
+custom_components/
+!custom_components/ha_integration_domain/
+
+# Auto-generated release files
+CHANGELOG.md
+
+# Symlinks into .agents/ — format the real directories once.
+.claude/
+.github/instructions/
+
+# Ignore-style files (no recognized extension — Prettier would misparse them)
+*ignore
