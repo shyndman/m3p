@@ -9,18 +9,16 @@ plus the conventions this repository adds on top of it:
 - ``description`` is present and within the 1024 character limit
 - SKILL.md body stays within the recommended 500 lines
 - reference files sit exactly one level below SKILL.md
-- relative markdown links resolve
+- relative markdown links resolve, in the skills and in every file that points into them
+- every skill is listed in the catalogues that template sync can update
 - no concrete project identifiers leak in (they must stay template-sync safe)
-- evals/evals.json, when present, has the expected shape
+- the marker blocks initialize.sh strips or rewrites are intact
 
 Invoked by script/skills-check; not intended to be run directly.
 """
 
-from __future__ import annotations
-
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-import json
 from pathlib import Path
 import re
 import sys
@@ -38,13 +36,26 @@ BODY_MAX_LINES = 500
 # Identifiers that initialize.sh rewrites. Skills must use the <domain> and {ClassPrefix}
 # placeholders instead, otherwise template sync would overwrite an initialized repository
 # with the blueprint's own names.
-FORBIDDEN_IDENTIFIERS = ("mqtt_media_bridge", "MqttMedia")
+FORBIDDEN_IDENTIFIERS = ("ha_integration_domain", "IntegrationBlueprint")
+
+# Instructions files that are meant to load in every session, so they carry no `paths`.
+UNCONDITIONAL_INSTRUCTIONS = {"blueprint.commit-message.instructions.md"}
+
+# AGENTS.md is a blueprint catalogue, but initialized repositories own and exclude it from
+# template sync. Their synchronized catalogue is the skills README.
+SKILLS_CATALOGUE = SKILLS_DIR / "README.md"
+AGENTS_CATALOGUE = Path("AGENTS.md")
 
 LINK_PATTERN = re.compile(r"\[[^\]]*\]\((?!https?:|mailto:|#)([^)]+)\)")
 
 # Sections initialize.sh strips when a project is initialised from the template.
 MARKER_START = "<!-- blueprint-only:start -->"
 MARKER_END = "<!-- blueprint-only:end -->"
+
+# The repository-role block initialize.sh rewrites, rather than strips.
+ROLE_FILE = Path("AGENTS.md")
+ROLE_MARKER_START = "<!-- repo-role:start -->"
+ROLE_MARKER_END = "<!-- repo-role:end -->"
 
 
 @dataclass
@@ -134,7 +145,7 @@ def check_body(path: Path, body_start: int, report: Report) -> None:
 
 def check_layout(skill_dir: Path, report: Report) -> None:
     """Validate that supporting files sit exactly one level below SKILL.md."""
-    for sub in ("references", "scripts", "assets", "evals"):
+    for sub in ("references", "scripts", "assets"):
         directory = skill_dir / sub
         if not directory.is_dir():
             continue
@@ -160,51 +171,6 @@ def check_links(path: Path, report: Report) -> None:
             report.error(f"{path} links to a missing file: {target}")
 
 
-def check_evals(skill_dir: Path, report: Report) -> None:
-    """
-    Validate evals/evals.json against the canonical format.
-
-    https://agentskills.io/skill-creation/evaluating-skills — assertions are plain
-    strings, not objects, so Anthropic's skill-creator plugin can consume the file.
-    """
-    evals_file = skill_dir / "evals" / "evals.json"
-    if not evals_file.is_file():
-        return
-
-    try:
-        data = json.loads(evals_file.read_text())
-    except json.JSONDecodeError as err:
-        report.error(f"evals/evals.json is not valid JSON: {err}")
-        return
-
-    if data.get("skill_name") != skill_dir.name:
-        report.error(f"evals/evals.json skill_name is {data.get('skill_name')!r}, expected {skill_dir.name!r}")
-
-    evals = data.get("evals")
-    if not isinstance(evals, list) or not evals:
-        report.error("evals/evals.json must contain a non-empty 'evals' list")
-        return
-
-    seen_ids: set[object] = set()
-    for index, item in enumerate(evals):
-        where = f"evals[{index}]"
-        for required in ("id", "prompt", "expected_output", "assertions"):
-            if required not in item:
-                report.error(f"{where} is missing '{required}'")
-        if item.get("id") in seen_ids:
-            report.error(f"{where} reuses id {item.get('id')!r}")
-        seen_ids.add(item.get("id"))
-        for extra in set(item) - {"id", "prompt", "expected_output", "assertions", "files"}:
-            report.error(f"{where} has non-canonical field {extra!r} — skill-creator ignores it")
-        assertions = item.get("assertions")
-        if not isinstance(assertions, list) or not assertions:
-            report.error(f"{where} must have a non-empty 'assertions' list")
-            continue
-        for assertion in assertions:
-            if not isinstance(assertion, str) or not assertion.strip():
-                report.error(f"{where} assertions must be non-empty strings, got {type(assertion).__name__}")
-
-
 def check_skill(skill_dir: Path) -> Report:
     """Run every check against one skill directory."""
     report = Report(skill=skill_dir.name)
@@ -218,7 +184,6 @@ def check_skill(skill_dir: Path) -> Report:
         check_frontmatter(skill_dir, fields, report)
         check_body(skill_file, body_start, report)
     check_layout(skill_dir, report)
-    check_evals(skill_dir, report)
     for markdown in sorted(skill_dir.rglob("*.md")):
         check_identifiers(markdown, report)
         check_links(markdown, report)
@@ -249,32 +214,156 @@ def check_blueprint_only_markers() -> list[Report]:
     return reports
 
 
-def check_instruction_globs() -> list[Report]:
+def check_repo_role_markers() -> Report:
     """
-    Verify that every instructions file declares the same globs twice.
+    Verify that AGENTS.md still carries exactly one repo-role block.
 
-    Copilot and VS Code read ``applyTo``; Claude Code reads ``globs`` through the
-    .claude/rules/instructions symlink. Both take the same comma-separated string, so they
-    must be byte-identical.
+    initialize.sh rewrites this block to say the repository is an initialised integration.
+    Unlike the blueprint-only markers, losing these fails silently in both directions: the
+    rewrite becomes a no-op, and every repository initialised from the template keeps a
+    block claiming it has not been initialised yet. Nothing surfaces that downstream, so
+    this check is the only thing standing between an edit here and wrong instructions in
+    every generated repository.
+    """
+    report = Report(skill=str(ROLE_FILE))
+    if not ROLE_FILE.is_file():
+        report.error(f"{ROLE_FILE} is missing — initialize.sh rewrites its repo-role block")
+        return report
 
-    ``globs`` rather than the officially documented ``paths``: community testing
-    (anthropics/claude-code#17204) reports that ``paths`` as a quoted YAML list never
-    matches, and that it fails silently — a rule that quietly stops scoping is worse than
-    one that errors.
+    text = ROLE_FILE.read_text()
+    starts = text.count(ROLE_MARKER_START)
+    ends = text.count(ROLE_MARKER_END)
+    if starts != 1 or ends != 1:
+        report.error(
+            f"expected exactly one repo-role block, found {starts} start and {ends} end marker(s) — "
+            "initialize.sh would silently leave the wrong role in place downstream"
+        )
+    elif text.index(ROLE_MARKER_START) > text.index(ROLE_MARKER_END):
+        report.error("repo-role end marker precedes its start marker")
+    return report
+
+
+def check_instruction_paths() -> list[Report]:
+    """
+    Verify the frontmatter contract of every instructions file.
+
+    Copilot and VS Code read ``applyTo`` as one comma-separated string; Claude Code reads
+    ``paths`` as a YAML list, through the .claude/rules/instructions symlink. The two must
+    describe the same set, so ``paths`` has to equal ``applyTo`` split on commas.
+
+    ``name`` and ``description`` are documented Copilot keys — the display name and the
+    hover text in the Chat view. Claude Code ignores them, which is harmless, but they are
+    required here so the two agents present the same set consistently.
+
+    ``paths`` is the only key Claude Code recognises. An unknown key is not rejected — the
+    file is simply treated as unscoped and loaded into every session, which is why a wrong
+    key here is invisible without this check. Files in UNCONDITIONAL_INSTRUCTIONS want that
+    behaviour and therefore declare no ``paths`` at all.
     """
     reports: list[Report] = []
     for path in sorted(INSTRUCTIONS_DIR.glob("*.instructions.md")):
         report = Report(skill=str(path))
         fields, _ = parse_frontmatter(path.read_text(), report)
-        if not report.errors:
-            apply_to = fields.get("applyTo")
-            globs = fields.get("globs")
-            if not isinstance(apply_to, str) or not apply_to.strip():
-                report.error("frontmatter is missing 'applyTo' (Copilot and VS Code need it)")
-            elif not isinstance(globs, str) or not globs.strip():
-                report.error("frontmatter is missing 'globs' — Claude Code would load this file into every session")
-            elif apply_to.strip() != globs.strip():
-                report.error("'applyTo' and 'globs' differ — they must be the identical comma-separated string")
+        if report.errors:
+            reports.append(report)
+            continue
+
+        apply_to = fields.get("applyTo")
+        paths = fields.get("paths")
+        unconditional = path.name in UNCONDITIONAL_INSTRUCTIONS
+
+        if "globs" in fields:
+            report.error(
+                "'globs' is Cursor's key and is ignored by Claude Code — use 'paths' (see the module docstring)"
+            )
+        for label in ("name", "description"):
+            value = fields.get(label)
+            if not isinstance(value, str) or not value.strip():
+                report.error(f"frontmatter is missing '{label}' (Copilot shows it in the Chat view)")
+        if not isinstance(apply_to, str) or not apply_to.strip():
+            report.error("frontmatter is missing 'applyTo' (Copilot and VS Code need it)")
+        elif unconditional:
+            if paths is not None:
+                report.error(f"{path.name} is listed as unconditional — it must not declare 'paths'")
+        elif paths is None:
+            report.error("frontmatter is missing 'paths' — Claude Code would load this file into every session")
+        elif not isinstance(paths, list) or not all(isinstance(p, str) and p.strip() for p in paths):
+            report.error("'paths' must be a YAML list of non-empty pattern strings, not a comma-separated string")
+        elif [p.strip() for p in paths] != [p.strip() for p in apply_to.split(",")]:
+            report.error("'paths' and 'applyTo' describe different patterns — 'paths' is 'applyTo' split on commas")
+        reports.append(report)
+    return reports
+
+
+def _pointer_files() -> list[Path]:
+    """
+    Return the markdown outside .agents/skills/ that points into it.
+
+    Each instructions file with a partner skill opens with a ``**Procedure:**`` link, and
+    both catalogues link every skill. check_skill() only walks the skill directories, so
+    without this list a removed skill leaves dangling pointers in exactly the files agents
+    rely on to find their way to a skill in the first place.
+    """
+    return [*sorted(INSTRUCTIONS_DIR.glob("*.md")), SKILLS_CATALOGUE, AGENTS_CATALOGUE]
+
+
+def _required_catalogue_files() -> tuple[Path, ...]:
+    """Return catalogues that can receive the same update as synchronized skills."""
+    if Path("initialize.sh").is_file():
+        return (SKILLS_CATALOGUE, AGENTS_CATALOGUE)
+    return (SKILLS_CATALOGUE,)
+
+
+def check_pointer_links() -> list[Report]:
+    """Verify that the links from those files still resolve."""
+    reports: list[Report] = []
+    for path in _pointer_files():
+        report = Report(skill=str(path))
+        if not path.is_file():
+            report.error("file is missing — it carries the pointers into .agents/skills/")
+        else:
+            check_links(path, report)
+        reports.append(report)
+    return reports
+
+
+def linked_skills(path: Path) -> set[str]:
+    """Return the names of the skill directories a markdown file links into."""
+    skills_root = SKILLS_DIR.resolve()
+    linked: set[str] = set()
+    for target in LINK_PATTERN.findall(path.read_text()):
+        resolved = (path.parent / target.split("#", 1)[0]).resolve()
+        if resolved == skills_root:
+            continue
+        try:
+            relative = resolved.relative_to(skills_root)
+        except ValueError:
+            continue
+        linked.add(relative.parts[0])
+    return linked
+
+
+def check_catalogue(skill_dirs: list[Path]) -> list[Report]:
+    """
+    Verify that every skill is listed in every synchronized catalogue.
+
+    There is no generator behind them, so a new skill is only ever added by hand and is
+    silently undiscoverable until it is. The reverse direction — a catalogue entry for a
+    skill that no longer exists — is covered by check_pointer_links().
+
+    Matching is by link target rather than by table row on purpose: the same skill appears
+    as a routing-table row in AGENTS.md, as a "Use when" row in the README, and as prose in
+    both, and all three forms are legitimate.
+    """
+    expected = {d.name for d in skill_dirs}
+    reports: list[Report] = []
+    for path in _required_catalogue_files():
+        report = Report(skill=str(path))
+        if not path.is_file():
+            report.error("catalogue file is missing")
+        else:
+            for name in sorted(expected - linked_skills(path)):
+                report.error(f"{name} is not linked from this catalogue — an unlisted skill is never discovered")
         reports.append(report)
     return reports
 
@@ -291,8 +380,9 @@ def main() -> int:
         return 0
 
     reports = [check_skill(d) for d in skill_dirs]
-    instruction_reports = check_instruction_globs()
-    marker_reports = check_blueprint_only_markers()
+    instruction_reports = check_instruction_paths()
+    pointer_reports = [*check_pointer_links(), *check_catalogue(skill_dirs)]
+    marker_reports = [*check_blueprint_only_markers(), check_repo_role_markers()]
 
     for report in reports:
         if report.errors:
@@ -310,7 +400,20 @@ def main() -> int:
             for error in report.errors:
                 print(f"      {error}")
         if not broken_instructions:
-            print(f"  ✓ {len(instruction_reports)} instruction files: applyTo and globs agree")
+            print(f"  ✓ {len(instruction_reports)} instruction files: applyTo and paths agree")
+
+    broken_pointers = [r for r in pointer_reports if r.errors]
+    if broken_pointers:
+        print()
+        for report in broken_pointers:
+            print(f"  ✗ {report.skill}")
+            for error in report.errors:
+                print(f"      {error}")
+    else:
+        print(
+            f"  ✓ {len(_pointer_files())} pointer files: every skill link resolves and "
+            f"{len(_required_catalogue_files())} synchronized catalogue(s) are complete"
+        )
 
     broken_markers = [r for r in marker_reports if r.errors]
     for report in broken_markers:
@@ -318,7 +421,7 @@ def main() -> int:
         for error in report.errors:
             print(f"      {error}")
 
-    failed = [r for r in reports if r.errors] + broken_instructions + broken_markers
+    failed = [r for r in reports if r.errors] + broken_instructions + broken_pointers + broken_markers
     print()
     if failed:
         print(f"{len(failed)} file(s) have problems.")

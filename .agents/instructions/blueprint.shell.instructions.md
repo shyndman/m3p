@@ -1,11 +1,21 @@
 ---
-applyTo: "script/**, .devcontainer/*.sh"
-globs: "script/**, .devcontainer/*.sh"
+name: "Shell Scripts"
+description: "Script structure, shfmt formatting, and shellcheck suppression rules"
+applyTo: "script/**, .devcontainer/*.sh, .agents/hooks/*.sh"
+paths:
+  - "script/**"
+  - ".devcontainer/*.sh"
+  - ".agents/hooks/*.sh"
 ---
 
 # Shell Script Instructions
 
-**Applies to:** Shell scripts in `script/` (extensionless by convention) and `**/.devcontainer/*.sh`
+**Procedure:** [`blueprint-tooling`](../skills/blueprint-tooling/SKILL.md) — load it before changing anything under
+`script/`. This file is the style rule set; the skill is which script a change belongs in, and when a hook script is
+the answer instead — most files here are template-managed and an edit is reverted by the next sync.
+
+**Applies to:** Shell scripts in `script/` (extensionless by convention), `.devcontainer/*.sh`, and
+`.agents/hooks/*.sh`
 
 ## Formatting Standards
 
@@ -73,11 +83,3 @@ script/shell-check  # shfmt -d + shellcheck -x  (reports remaining issues)
 
 `script/shell` fixes formatting but does not run shellcheck (no auto-fix available).
 Always follow with `script/shell-check` to catch logic and style issues.
-
-**Suppressing shellcheck for an entire file** (use only in library scripts):
-
-```bash
-# shellcheck disable=SC2034
-```
-
-Place at the top of the file, after the shebang and `set -euo pipefail`.

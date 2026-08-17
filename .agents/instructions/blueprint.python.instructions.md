@@ -1,6 +1,9 @@
 ---
+name: "Python Code"
+description: "Module layout, type hints, async patterns, imports, logging, and validation"
 applyTo: "**/*.py"
-globs: "**/*.py"
+paths:
+  - "**/*.py"
 ---
 
 # Python Code Instructions
@@ -57,13 +60,25 @@ sensor/
 
 **Import rules:**
 
-- `from __future__ import annotations` (always first import)
+- Never `from __future__ import annotations` — Home Assistant requires Python 3.14, where annotations are already
+  lazily evaluated; Ruff's `banned-api` rejects it
 - `collections.abc` for abstract base classes (prefer over `typing`)
 - `typing` for complex types (Any, TYPE_CHECKING, etc.)
 
 **Avoiding circular imports:**
 
 Use `if TYPE_CHECKING:` block for type-only imports that would cause circular dependencies.
+
+**Narrowing a type for Pyright:** an `assert x is not None` belongs **inside** a `TYPE_CHECKING` block, so it exists
+for the type checker and changes nothing at runtime:
+
+```python
+if TYPE_CHECKING:
+    assert self.config_entry is not None
+```
+
+**Docstrings** are Google style when they need more than a summary line — `Args:`, `Returns:`, `Raises:`. Leave the
+types out; the annotations already carry them.
 
 ## Async Patterns
 
@@ -81,9 +96,14 @@ Use `if TYPE_CHECKING:` block for type-only imports that would cause circular de
 - `await hass.async_add_executor_job(sync_function, arg1, arg2)` - Run blocking I/O in executor thread
 - Avoid if sync function also uses executor internally (deadlock risk)
 
-**Background tasks:**
+**Background tasks:** inside an integration, create tasks on the **config entry**, not on `hass` — the entry cancels
+them on unload, which `hass.async_create_task` does not.
 
-- `hass.async_create_task(coroutine)` - Fire-and-forget parallel execution
+- `entry.async_create_task(hass, coroutine)` - Work that must finish before the entry unloads
+- `entry.async_create_background_task(hass, coroutine, name)` - Long-lived loops (a listener, a reconnect loop)
+- `hass.async_create_task(coroutine)` - Only in `async_setup()` scope, where there is no entry
+- All three default to `eager_start=True`: the coroutine runs synchronously up to its first `await` before the call
+  returns. Do not assume it starts on the next loop iteration — ordering-sensitive code and tests will surprise you.
 - `asyncio.run_coroutine_threadsafe(coro, hass.loop).result()` - From sync thread (rare)
 
 **Callback decorator:**
@@ -93,26 +113,21 @@ Use `if TYPE_CHECKING:` block for type-only imports that would cause circular de
 - Cannot do I/O, cannot call coroutines (only schedule them)
 - Missing decorator causes execution in executor thread (wrong context)
 
-**Blocking operations (NEVER in event loop):**
+**Never block the event loop.** File and directory operations, `urllib`, `time.sleep` and SSL context loading all
+block; so does calling an `async_*` API from a worker thread, which raises outright. The lookup tables — which sync
+twin to call from a thread, the full blocking-call list with the `open()` trap, and the four late-import cases — are
+in [`ha-coordinator-debug/references/async-rules.md`](../skills/ha-coordinator-debug/references/async-rules.md).
 
-- File: `open()`, `pathlib.Path.read_text()`, `pathlib.Path.write_bytes()`
-- Directory: `os.listdir()`, `os.walk()`, `glob.glob()`
-- Network: `urllib` (use `aiohttp`)
-- Other: `time.sleep()`, `SSLContext.load_default_certs()`
-- **All must run in executor:** `await hass.async_add_executor_job(blocking_func)`
-
-**Late imports:**
-
-- Module-level imports are safe
-- Late async imports: `await async_import_module(hass, "module.path")`
-- `if TYPE_CHECKING:` for type-only imports
+**Late imports:** module-level imports are safe. Anything conditional needs one of the import helpers in that
+reference, because CPython's import machinery is not thread-safe. Type-only imports go in `if TYPE_CHECKING:`.
 
 ## Code Style
 
 **Conventions not enforced by Ruff:**
 
-- Comments as complete sentences with capitalization and ending period
 - Alphabetical sorting of constants/lists when order doesn't matter
+- Comments: see `blueprint.comments.instructions.md` for when one is warranted at all — the default is none, and
+  those that survive are complete sentences with capitalization and an ending period
 
 **Note:** Ruff enforces `__all__`/`__slots__` sorting, import ordering, f-string usage in logs.
 
@@ -122,10 +137,17 @@ Use `if TYPE_CHECKING:` block for type-only imports that would cause circular de
 
 See [Integration Setup Failures](https://developers.home-assistant.io/docs/integration_setup_failures) for details.
 
-- `ConfigEntryNotReady` - Device offline/unavailable (raises in `async_setup_entry()`)
+- `ConfigEntryNotReady` - Device offline/unavailable, retry later (raise in `async_setup_entry()`)
 - `ConfigEntryAuthFailed` - Expired credentials (triggers reauth flow)
+- `ConfigEntryError` - Will not resolve on its own (closed account, unsupported device); stops the retry loop
 - Pass error message to exception (HA logs at debug level automatically)
 - **Do NOT log setup failures manually** - Avoid log spam
+- **Do NOT write your own retry loop** - Home Assistant already retries `ConfigEntryNotReady` with exponential backoff
+- Outside setup and the coordinator, `ConfigEntryAuthFailed` does nothing — call `entry.async_start_reauth(hass)`
+- Raising any of the three still runs the `entry.async_on_unload` callbacks, but does **not** replace
+  `async_unload_entry` — that always has to exist
+- Raising `ConfigEntryNotReady` in a **platform's** `async_setup_entry` does nothing; by then the config entry setup
+  has already completed and cannot catch it
 
 **Constants:**
 
@@ -137,6 +159,8 @@ See [Integration Setup Failures](https://developers.home-assistant.io/docs/integ
 - Always use constants from `homeassistant.const` - Never hardcode strings
 - Examples: `UnitOfDensity.MICROGRAMS_PER_CUBIC_METER`, `PERCENTAGE`, `UnitOfTime.HOURS`
 - Construct compound units if no combined constant exists: `f"{UnitOfLength.METERS}/{UnitOfTime.SECONDS}"`
+- **Do not convert units yourself.** Set `native_unit_of_measurement` and let Home Assistant convert according to
+  `hass.config.units`. `hass.config.language` and `.country` are there too, when an API needs a locale.
 
 **Time and Timestamps:**
 
@@ -154,102 +178,58 @@ See [Integration Setup Failures](https://developers.home-assistant.io/docs/integ
 
 - Prefix with integration domain: `<domain>_<event_name>`
 - Example: `hass.bus.async_fire(f"{DOMAIN}_device_paired", data)`
+- Event data — like state attributes — must be **JSON-serializable**. A `datetime` or a dataclass breaks the
+  recorder and the WebSocket API; convert before firing. Fired events land in the recorder database, so keep the
+  payload small.
 
 **PARALLEL_UPDATES:**
 
-- Define in platform `__init__.py` if needed
-- Controls concurrent entity updates (default: 0 for async, 1 for sync)
-- Import from `const.py` if shared across platforms
+- Required in **every** platform `__init__.py`, not optional — a missing one fails the `parallel-updates` rule
+- A module-level literal, never imported from `const.py`; `0` or `1` is decided per platform in
+  [`blueprint.entities`](blueprint.entities.instructions.md)
+- Left undefined, Home Assistant derives it: `0` when the entity defines `async_update`, otherwise `1`
 
 ## Imports
 
-**Order (separated by blank lines):**
+Ruff orders them. **Standard HA aliases:** `vol`, `cv`, `dr`, `er`, `dt_util`.
 
-1. `from __future__ import annotations`
-2. Standard library
-3. Third-party packages
-4. Home Assistant core
-5. Local integration imports
+**A relative import may not reach into a parent package.** Ruff's `TID252` runs with the default
+`ban-relative-imports = "parents"`, the same setting Home Assistant Core uses, so `from ..const import DOMAIN` is
+rejected wherever it appears — including inside an `if TYPE_CHECKING:` block. Siblings within the same package are
+fine.
 
-**Standard HA aliases:** `vol`, `cv`, `dr`, `er`, `dt_util`
+- ✅ `from .base import {ClassPrefix}Entity` — same package
+- ✅ `from custom_components.<domain>.const import DOMAIN` — anything above it
+- ❌ `from ..const import DOMAIN`, `from ...api import ApiClient`
 
-## Entity Classes
-
-**Structure requirements:**
-
-- Inherit from both platform entity and the base entity class from `..entity` (order matters)
-- Set `_attr_unique_id` in `__init__` (format: `{entry_id}_{key}`)
-- Use coordinator data only - Never call API directly
-- Handle unavailability via `_attr_available`
+The absolute form is long, and reaching for `..` to shorten it is the reflex this rule exists to stop: `script/lint`
+reports it, but only after the file is written.
 
 ## Error Handling
 
 **Use specific exceptions from integration's exception module**
 
-**Logging levels:**
+**Errors that reach the user** — from a service action handler _and_ from an entity method
+(`async_set_native_value`, `async_set_hvac_mode`, …):
 
-- `_LOGGER.critical()` - System-critical failures
-- `_LOGGER.exception()` - Errors with full traceback (in exception handlers)
-- `_LOGGER.error()` - Errors affecting functionality
-- `_LOGGER.warning()` - Recoverable issues
-- `_LOGGER.info()` - Sparingly, user-facing only
-- `_LOGGER.debug()` - Detailed troubleshooting
+- `ServiceValidationError` — the user got something wrong (bad value, unsupported option). The stack trace is only
+  logged at debug level, so they see a message rather than a wall of text.
+- `HomeAssistantError` — the device or service failed. The full stack trace **is** logged.
+- **Never `ValueError`.** It is what these two exist to replace, and it reaches the user as an unhandled crash.
 
-**Log message style:**
+Both take `translation_domain`, `translation_key` and `translation_placeholders` — never a plain English string.
 
-- No periods at end (syslog style)
-- Never log credentials/tokens/API keys
-- Use `%` formatting (enforced by Ruff G004)
-
-## Testing Considerations
-
-**Note: Only write tests when explicitly requested by the developer.**
-
-If you are asked to write tests for entities:
-
-**Example test structure:**
-
-```python
-"""Test sensor platform."""
-
-import pytest
-
-from custom_components.{domain}.sensor import async_setup_entry
-
-@pytest.mark.unit
-async def test_sensor_setup(hass, config_entry, coordinator):
-    """Test sensor platform setup."""
-    # Test implementation
-```
-
-## Common Patterns
-
-**Config entry data:** `entry.runtime_data.coordinator` / `entry.runtime_data.client` — runtime objects stored during `async_setup_entry()` in `data.py`
-
-**Device info:** Provided via base entity class (manufacturer, model, serial, config URL, firmware)
+**Logging:** `_LOGGER.exception()` inside an exception handler, `_LOGGER.info()` sparingly and only for something the
+user needs. No period at the end (syslog style), never a credential, token or API key in any line at any level, and
+`%` formatting rather than an f-string (Ruff G004).
 
 ## Validation
 
-**Recommended workflow — run fix scripts first, they report what they couldn't fix:**
+`script/python` then `script/type-check`, until both exit 0 — the full loop and the fix/check matrix are in
+[`blueprint-tooling`](../skills/blueprint-tooling/SKILL.md).
 
-```bash
-script/python       # Ruff format + ruff check --fix — output shows remaining errors
-script/type-check   # Pyright — no auto-fix, always manual
-```
-
-Repeat until both exit 0. Only manually edit files for errors that remain in the output.
-
-**When validation fails:**
-
-- Look up error codes: [Ruff rules](https://docs.astral.sh/ruff/rules/), [Pyright docs](https://microsoft.github.io/pyright/)
-- Search [HA docs](https://developers.home-assistant.io/) for patterns
-- Fix root cause — don't bypass checks
-
-**Suppressing checks (use sparingly for false positives/library issues):**
-
-- Specific suppression: `# noqa: F401 - Reason` or `# type: ignore[attr-defined] - Reason`
-- **Never use blanket:** `# noqa`, `# type: ignore`, `# ruff: noqa`
-- Always include error codes and explanatory comments
+**Suppressing a check:** always with the specific code and a reason — `# noqa: F401 - Reason`,
+`# type: ignore[attr-defined] - Reason`. Never bare `# noqa`, `# type: ignore` or `# ruff: noqa`.
 
 ## Verify Current Patterns
 
@@ -260,8 +240,4 @@ devcontainer is the authority** — grep it before trusting recall, a blog post,
 rg -n "deprecated|breaks_in_ha_version" .venv/lib/python*/site-packages/homeassistant/helpers/<module>.py
 ```
 
-For the procedure and the full deprecation table, see the `ha-modern-apis` agent skill
-(`.agents/skills/ha-modern-apis/SKILL.md`). Secondary sources:
-
-- [Home Assistant Developer Docs](https://developers.home-assistant.io/)
-- [Developer Blog](https://developers.home-assistant.io/blog/) for deprecations/changes
+The procedure and the full deprecation table: [`ha-modern-apis`](../skills/ha-modern-apis/SKILL.md).
