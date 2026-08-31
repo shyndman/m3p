@@ -1,9 +1,16 @@
 ---
+name: "Translation Files"
+description: "Key structure, placeholders, entity translations, and formality rules"
 applyTo: "**/translations/*.json"
-globs: "**/translations/*.json"
+paths:
+  - "**/translations/*.json"
 ---
 
 # Translation Files Instructions
+
+**Procedure:** [`ha-translations`](../skills/ha-translations/SKILL.md) — load it before adding or changing strings.
+This file is the rule set; the skill is which keys a given change actually needs, which is where most missing-key
+findings from `script/hassfest` come from.
 
 **Applies to:** `custom_components/<your_domain>/translations/*.json`
 
@@ -41,27 +48,16 @@ Translation files define user-facing text for config flows, options, entities, a
 
 **Note:** This is about quotes _inside the string value_, not the JSON delimiter quotes (which must always be double quotes per JSON spec).
 
-**Key references:** Use `[%key:...]` syntax to reuse translations
+**NEVER use `[%key:...%]` references, and never create `strings.json`.** Both are Home Assistant **Core**
+build-time features. Core compiles `strings.json` into `translations/en.json` and resolves the references on the way;
+a custom integration has no such build step, so its `translations/*.json` is served exactly as written.
 
-```json
-{
-  "config": {
-    "error": {
-      "invalid_auth": "Invalid credentials",
-      "stale_auth": "[%key:component::{domain}::config::error::invalid_auth%]"
-    }
-  }
-}
-```
+- ❌ `"stale_auth": "[%key:component::{domain}::config::error::invalid_auth%]"` — the UI shows that literal string
+- ❌ `"off": "[%key:common::state::off%]"` — Core's `common` strings do not exist here
+- ✅ Write out the full English text for every key, even when it duplicates another key or a Core string
 
-**Reference Home Assistant common strings:**
-
-```json
-"state": {
-  "off": "[%key:common::state::off%]",
-  "on": "[%key:common::state::on%]"
-}
-```
+Symptom when this is wrong: the config flow shows raw keys (`username` instead of `Enter Username`) instead of
+translated labels.
 
 ### Entity Translations
 
@@ -105,64 +101,27 @@ These fields support Markdown formatting:
 
 ### Formality Level
 
-**Use informal language** in languages that distinguish between formal and informal address:
-
-- **German:** Use "du" (informal), not "Sie" (formal). Use correct imperative forms (e.g., "Gib", not "Gebe").
-- **French:** Use "tu" (informal), not "vous" (formal)
-- **Spanish:** Use "tú" (informal), not "usted" (formal)
-- Apply to all variations (we/you plural: wir/ihr, nous/vous, etc.)
-
-**Example (German):**
-
-- ✅ "Gib deine Anmeldedaten ein" (informal, correct imperative)
-- ❌ "Geben Sie Ihre Anmeldedaten ein" (formal)
-- ❌ "Gebe deine Anmeldedaten ein" (wrong imperative form)
-
-**German-specific rule:** Pay attention to correct imperative forms (Befehlsform). See [Duden: Bildung des Imperativs](https://www.duden.de/sprachwissen/sprachratgeber/Bildung-des-Imperativs).
+**Use informal address** in every language that distinguishes it — German "du" not "Sie", French "tu" not "vous",
+Spanish "tú" not "usted", and the same for the plural forms. German additionally needs the correct imperative:
+"Gib deine Anmeldedaten ein", never "Gebe" ([Duden: Bildung des
+Imperativs](https://www.duden.de/sprachwissen/sprachratgeber/Bildung-des-Imperativs)).
 
 ### Multi-Language Files
 
-All language files must have identical structure - only values differ:
-
-**en.json:**
-
-```json
-{ "config": { "step": { "user": { "title": "Configure Device" } } } }
-```
-
-**de.json:**
-
-```json
-{ "config": { "step": { "user": { "title": "Gerät konfigurieren" } } } }
-```
-
-## Common Mistakes
-
-- ❌ Translating placeholder names (e.g., `{host}` → `{hôte}`)
-- ❌ Translating proper nouns (Home Assistant, brand names)
-- ❌ Using formal language (Sie/vous) instead of informal (du/tu)
-- ❌ Missing `translation_key` in entity code
-- ❌ Using entity translations without `has_entity_name=True`
-- ❌ Inconsistent key structure across language files
-- ❌ Invalid JSON syntax (trailing commas, comments)
-- ❌ Wrong key reference syntax (must be exact: `[%key:...]`)
+All language files must have identical structure — only the values differ. For a region-specific file (`en-US`,
+`fr-CA`), only include keys whose translation actually differs from the base language.
 
 ## Best Practices
 
-**Translation Quality Guidelines:**
-
-1. **Only native speakers** should provide translations
-2. **Stick to [Material Design guidelines](https://material.io/design/communication/writing.html)** for writing
-3. **Don't translate proper nouns** (Home Assistant, Supervisor, brand names)
-4. **Keep badge labels short** - Test `state_badge` translations fit in UI without overflowing
-5. **Use key references** `[%key:...]` to avoid duplicate translations
-6. **Keep consistent terminology** within and across languages
-7. **Provide helpful descriptions** for non-obvious fields in `data_description`
-
-**For region-specific translations** (e.g., `en-US`, `fr-CA`): Only include if translations differ from base language. Clone unchanged keys from source (helps track review status).
+- **Only native speakers** should provide translations
+- **Keep badge labels short** — a `state_badge` translation that overflows is only visible in the UI
+- **Accept duplicated text** — there is no reference syntax here, so the same sentence is written out per key
+- **Keep consistent terminology** within and across languages
+- **Provide helpful descriptions** for non-obvious fields in `data_description`
 
 ## References
 
 - [Custom Integration Localization](https://developers.home-assistant.io/docs/internationalization/custom_integration) - **Primary reference**
-- [Backend Localization](https://developers.home-assistant.io/docs/internationalization/core) - Complete structure documentation
+- [Backend Localization](https://developers.home-assistant.io/docs/internationalization/core) - Key structure only; it
+  documents Core's `strings.json` and its `[%key:...%]` syntax, neither of which applies here
 - [ICU Message Format](https://formatjs.github.io/docs/core-concepts/icu-syntax/) - Placeholder syntax for plurals

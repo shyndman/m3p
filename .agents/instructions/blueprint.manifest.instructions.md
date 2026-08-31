@@ -1,6 +1,9 @@
 ---
+name: "Integration Manifest"
+description: "Required manifest.json fields, integration types, and IoT classes"
 applyTo: "**/manifest.json"
-globs: "**/manifest.json"
+paths:
+  - "**/manifest.json"
 ---
 
 # Manifest Instructions
@@ -36,7 +39,8 @@ This schema combines Home Assistant's official manifest requirements with HACS-s
 
 - `domain` - Integration identifier (matches directory name)
 - `name` - Display name in Home Assistant
-- `version` - Semantic version (required for HACS)
+- `version` - Required for HACS. Any version AwesomeVersion recognises works (SemVer, CalVer); this project uses
+  SemVer, and `script/version` owns the field.
 - `documentation` - Link to documentation
 - `issue_tracker` - Link to GitHub issues (required for HACS)
 - `codeowners` - GitHub usernames for notifications
@@ -44,16 +48,31 @@ This schema combines Home Assistant's official manifest requirements with HACS-s
 **Integration behavior:**
 
 - `config_flow` - Boolean, true if integration has UI config
-- `integration_type` - One of: `device`, `hub`, `service`, `helper`, `system`, `virtual`
+- `integration_type` - One of: `device`, `hub`, `service`, `helper`. `virtual` can only be provided by Home Assistant
+  Core, and `entity`, `hardware` and `system` are not for integrations like this one. Unset defaults to `hub` — set it
+  explicitly.
 - `iot_class` - Connectivity type (see below)
 - `requirements` - Python package dependencies
 
 **Optional fields:**
 
-- `dependencies` - Home Assistant integrations this depends on
-- `after_dependencies` - Load after these integrations
-- `dhcp`, `zeroconf`, `ssdp`, `usb`, `bluetooth` - Discovery configs
+- `dependencies` - Integrations loaded before setup. This guarantees the integration is **loaded**, not that its
+  config entries are set up. A custom integration may list both built-in and other custom integrations here.
+- `after_dependencies` - Load after these integrations, without requiring them
+- `loggers` - The logger names the integration's requirements use in their `getLogger` calls, so the user's log-level
+  setting reaches the library too
+- `single_config_entry` - `true` prevents the user adding a second entry. This is the only thing that makes "the one
+  entry" a safe assumption in a service action handler.
+- `quality_scale` - The tier the integration claims. Optional for custom integrations and not shown in the UI.
+- `dhcp`, `zeroconf`, `ssdp`, `usb`, `bluetooth` - Discovery configs. Each protocol has a matcher rule that fails
+  silently when guessed — see
+  [`ha-config-flow/references/discovery-matchers.md`](../skills/ha-config-flow/references/discovery-matchers.md).
 - `homekit`, `mqtt` - Protocol configs
+- `preview_features` - Home Assistant Labs. A real key, but the surrounding process (feedback threads, Core issue
+  templates) is Core-only; a HACS integration just releases a version instead.
+
+**Naming:** if the product exists as both a local and a cloud integration, the cloud one appends "Cloud". The local
+one uses the plain product name — never append "Local".
 
 ## IoT Class Values
 
@@ -72,47 +91,17 @@ Use package name with version constraint:
 
 ```json
 "requirements": [
-  "aiohttp>=3.9.0",
   "some-package==1.2.3"
 ]
 ```
 
-## Codeowners Format
-
-GitHub usernames with `@` prefix:
-
-```json
-"codeowners": [
-  "@shyndman"
-]
-```
-
-## Version
-
-Use semantic versioning: `MAJOR.MINOR.PATCH`
-
-- Increment MAJOR for breaking changes
-- Increment MINOR for new features
-- Increment PATCH for bug fixes
+**Only list what Home Assistant does not already ship.** A custom integration must not repeat a package from Core's
+own `requirements.txt` — `aiohttp`, `voluptuous`, `httpx`, `awesomeversion` and friends are already there, and
+pinning them from here can only conflict with Core.
 
 ## Validation
 
-Manifest is validated by:
-
-- Home Assistant on integration load
-- HACS validation
-- Schema validator
-
-Errors appear in Home Assistant logs.
-
-## Common Mistakes
-
-- ❌ Missing `version` (required for HACS)
-- ❌ Missing `issue_tracker` (required for HACS)
-- ❌ Wrong `domain` (must match directory)
-- ❌ Invalid `iot_class` value
-- ❌ Unquoted version numbers
-- ❌ Trailing commas in JSON
+`script/hassfest` is the gate. Home Assistant and HACS also validate on load, and errors appear in the log.
 
 ## References
 
