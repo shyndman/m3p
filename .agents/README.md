@@ -1,10 +1,12 @@
 # Agent configuration
 
-This directory is the vendor-neutral home for everything AI coding agents read in this repository. Vendor-specific
-paths under `.github/` and `.claude/` are symlinks into here, so a file is written once and every agent gets it.
+This directory is the vendor-neutral home for shared agent instructions, skills, lifecycle-hook implementations, and
+scratch work. Vendor discovery files under `.github/`, `.claude/`, and `.codex/` either link here or call the shared
+implementation.
 
 ```text
 .agents/
+├── hooks/          shared lifecycle-hook implementations
 ├── instructions/   path-scoped style rules, one file per file type
 ├── skills/         task-triggered procedures (Agent Skills standard)
 └── scratch/        working notes and generated reports — gitignored
@@ -20,11 +22,12 @@ symlinks fill the rest:
 | Codex CLI      | `AGENTS.md` (native)                    | — none; open the file yourself        | `.agents/skills/` |
 | GitHub Copilot | `AGENTS.md` (native)                    | `.github/instructions/` via `applyTo` | `.agents/skills/` |
 | VS Code        | `AGENTS.md` (native)                    | `.github/instructions/` via `applyTo` | `.agents/skills/` |
-| Claude Code    | `CLAUDE.md`, which imports `@AGENTS.md` | `.claude/rules/` via `globs`          | `.claude/skills/` |
+| Claude Code    | `CLAUDE.md`, which imports `@AGENTS.md` | `.claude/rules/` via `paths`          | `.claude/skills/` |
 
 ```text
 .agents/instructions/         real directory — edit here
 .agents/skills/               real directory — edit here
+.agents/hooks/                real directory — called by vendor hook configs
 .github/instructions        → ../.agents/instructions
 .claude/rules/instructions  → ../../.agents/instructions
 .claude/skills              → ../.agents/skills
@@ -33,8 +36,12 @@ symlinks fill the rest:
 Editing through a symlink edits the same file. Do it in `.agents/` anyway, so your diff shows the path other
 maintainers see. Never turn a symlink back into a real directory — that is how vendor copies drift apart.
 
-Each instructions file carries the same glob list twice: `applyTo` for Copilot and VS Code, `globs` for Claude Code.
-`script/skills-check` fails the build if the two disagree, or if `globs` is missing — a rule without it loads into
+Lifecycle hooks are configured in `.claude/settings.json` for Claude Code, VS Code, and local Copilot, and in
+`.codex/hooks.json` for Codex. Both call the same scripts under `.agents/hooks/`; edit the shared script rather than
+forking behavior into a client directory.
+
+Each instructions file carries the same glob list twice: `applyTo` for Copilot and VS Code, `paths` for Claude Code.
+`script/skills-check` fails the build if the two disagree, or if `paths` is missing — a rule without it loads into
 every Claude Code session instead of the files it was scoped to.
 
 ## The four layers
@@ -57,10 +64,10 @@ file being edited, so nothing loads automatically. Every skill therefore names t
 Files here use generic placeholders instead of this project's concrete identifiers, so template sync can update them
 without clobbering an initialized repository:
 
-| Placeholder     | Means                                                            | Example in this repo |
-| --------------- | ---------------------------------------------------------------- | -------------------- |
-| `<domain>`      | the integration domain, i.e. the `DOMAIN` constant in `const.py` | `mqtt_media_bridge`  |
-| `{ClassPrefix}` | the class name prefix used by every integration class            | `MqttMedia`          |
+| Placeholder     | Means                                                            | Example in this repo    |
+| --------------- | ---------------------------------------------------------------- | ----------------------- |
+| `<domain>`      | the integration domain, i.e. the `DOMAIN` constant in `const.py` | `ha_integration_domain` |
+| `{ClassPrefix}` | the class name prefix used by every integration class            | `IntegrationBlueprint`  |
 
 Substitute them mentally against `const.py` and `manifest.json`; never write them literally into code.
 
@@ -118,7 +125,6 @@ rather than fixing it again each week.
 
 ```bash
 script/skills-check   # skills and instruction files — part of script/lint-check, so CI enforces it
-script/skill-evals    # behavioural evals for the skills — costs model calls, run it manually
 ```
 
 Writing and maintaining skills is documented in [`skills/README.md`](skills/README.md).

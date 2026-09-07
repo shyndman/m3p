@@ -18,9 +18,10 @@ description: >-
 when a string is missing, so a missing key is a visible bug, not a cosmetic one.
 
 **Read [`blueprint.translations.instructions.md`](../../instructions/blueprint.translations.instructions.md)
-first** — it holds the rules: placeholder syntax and the single-quote trap that breaks hassfest, `[%key:…%]` references
-to common strings, entity translation requirements, which fields accept Markdown, proper nouns, the informal-address
-rule per language, and cross-language structure. This skill is which keys a given change needs, and how to write them.
+first** — it holds the rules: placeholder syntax and the single-quote trap that breaks hassfest, why `[%key:…%]` and
+`strings.json` must never appear here, entity translation requirements, which fields accept Markdown, proper nouns, the
+informal-address rule per language, and cross-language structure. This skill is which keys a given change needs, and
+how to write them.
 
 ## The project rule on languages
 
@@ -52,9 +53,15 @@ rule per language, and cross-language structure. This skill is which keys a give
   "services": { "set_target_value": { "name": "…", "description": "…", "fields": {} } },
   "exceptions": { "set_target_value_failed": { "message": "…" } },
   "issues": { "deprecated_api_endpoint": { "title": "…", "description": "…" } },
-  "selector": { "mode": { "options": { "auto": "Automatic" } } }
+  "selector": { "mode": { "options": { "auto": "Automatic" }, "unit_of_measurement": "seconds" } },
+  "config_subentries": { "device": { "step": { "user": { "data": {} } } } },
+  "device": { "gateway": { "name": "…" } },
+  "system_health": { "info": { "api_endpoint": "…" } }
 }
 ```
+
+`config` also takes `flow_title`, `progress` and `create_entry` alongside `step`. Subentry strings live under
+`config_subentries.<type>`, never under `config`.
 
 ## Which keys does my change need?
 
@@ -69,7 +76,9 @@ rule per language, and cross-language structure. This skill is which keys a give
 | An options flow field              | `options.step.init.data.<field>` and `options.step.init.data_description.<field>`               |
 | A service action                   | `services.<action>.name`, `.description`, `.fields.<field>.name`, `.fields.<field>.description` |
 | A raised `HomeAssistantError`      | `exceptions.<translation_key>.message`                                                          |
-| A repair issue                     | `issues.<issue_id>.title` and `.description` (plus `.fix_flow.*` for a guided fix)              |
+| A repair issue                     | `issues.<issue_id>.title`, plus **either** `.description` **or** `.fix_flow.*` — never both     |
+| A config subentry flow             | `config_subentries.<type>.step.<step>.…`, mirroring the `config` shape                          |
+| A `system_health` value            | `system_health.info.<key>`                                                                      |
 
 Two rules that catch most mistakes:
 
@@ -97,18 +106,35 @@ raise HomeAssistantError(
 
 ## Writing the strings
 
-- Sentence case for names and labels ("Target temperature", not "Target Temperature"). Proper nouns keep their casing.
+- Sentence case for names and labels ("Target temperature", not "Target Temperature"). Proper nouns and capitalised
+  abbreviations keep their casing.
+- **Keys** are `snake_case` — including translated state values and state attributes. Only the values are prose.
 - No trailing period on `name` and `data` labels; full sentences with a period for `description` and `data_description`.
 - Do not repeat the device or integration name in an entity name — `_attr_has_entity_name = True` means Home Assistant
   prefixes it already. "Temperature", not "Blueprint device temperature".
 - Error messages say what happened and what to do, and never leak credentials, tokens, or raw stack traces.
-- Reuse Home Assistant's common strings where they exist instead of writing a new variant of "Failed to connect" — see
-  the `[%key:…%]` section in the instructions file.
+- Match the wording Home Assistant uses for the same situation ("Failed to connect", "Invalid authentication") rather
+  than inventing a variant — but write the text out. Core's `[%key:…%]` references do not resolve in a custom
+  integration, so duplication is the correct outcome here, not a smell.
+- Use the word the project already settled on. If `docs/development/GLOSSARY.md` exists it decides the wording here,
+  because renaming an entity later is a breaking change ([`ha-grill`](../ha-grill/SKILL.md) is where those terms are
+  agreed).
 
 ## icons.json
 
 Entity icons belong in `custom_components/<domain>/icons.json`, not in `EntityDescription(icon=...)`.
-The file does not exist yet in this integration — create it when the first icon is needed.
+
+**Do not give an entity an icon its device class already provides.** A PM2.5 sensor, a temperature sensor, a battery
+sensor are all iconed correctly by Home Assistant; overriding them makes the integration look inconsistent with every
+other one. Add an icon where there is no device class, or where the context genuinely differs from it.
+
+Beyond a plain icon, a key can carry:
+
+- `range` — pick by value: `{"0": "mdi:battery-outline", "10": "mdi:battery-10", …}`, ascending, and the icon chosen
+  is the highest bound less than or equal to the current value. `default` covers unavailable or unparseable states.
+  If a key defines both `state` and `range`, **`state` wins**.
+- `state_attributes` — icons per attribute value, for things like a climate preset or a fan mode. Only attributes,
+  not arbitrary keys.
 
 ```json
 {

@@ -1,16 +1,15 @@
 ---
 name: ha-breaking-changes
 description: >-
-  Handle any change to this Home Assistant custom integration that could break existing user installations —
-  renaming or restructuring unique IDs and entity IDs, changing config entry data, removing or renaming config
-  options and service actions, changing state values, units, device classes or attributes, raising the minimum
-  Home Assistant version, or removing entities and devices. Use when asked to "rename", "restructure", "clean up
-  the unique IDs", "remove this option", "change the state format", or whenever you notice a planned change would
+  Handle any change to this Home Assistant custom integration that could break existing installations — unique IDs
+  and entity IDs, config entry data, config options, service actions, state values, units, device classes, the
+  minimum Home Assistant version, or removing entities and devices. Use when asked to "rename", "restructure",
+  "clean up the unique IDs", "remove this option", "change the state format", or whenever a planned change would
   invalidate an existing install. Covers the warn-first policy, unique ID and config entry migration, repair
-  issues, deprecation periods, and documenting the change. SYMPTOMS — load this if you are about to: rename an
-  `EntityDescription.key`, unique ID, or entity ID; remove a config option because it looks unused; change a unit,
-  device class, or state class; treat a prior approval as standing permission; or fold a breaking change into an
-  unrelated commit.
+  issues, deprecation periods, how the bar differs before 1.0.0, and documenting the change. SYMPTOMS — load this
+  if you are about to: rename an `EntityDescription.key`, unique ID, or entity ID; remove a config option because
+  it looks unused; change a unit, device class, or state class; treat a prior approval as standing permission;
+  write a migration or bump `VERSION` before 1.0.0; or fold a breaking change into an unrelated commit.
 ---
 
 # Breaking changes
@@ -18,6 +17,33 @@ description: >-
 Users have automations, dashboards, scripts, and long-term statistics wired to this integration's entity IDs, unique
 IDs, states, and action names. Breaking any of them is a real cost to real people, and the integration cannot see who
 it broke.
+
+## Which side of 1.0.0 is this?
+
+Everything below assumes a released, stable integration. **Before `1.0.0` the trade-off is genuinely different, and
+applying the post-1.0 rules early is its own kind of damage**: compatibility code accumulates in a codebase whose
+shape is not settled yet, which is exactly what makes reaching a stable 1.0.0 harder.
+
+Before 1.0.0:
+
+- **A breaking change is an acceptable outcome, and usually the right one.** Getting the shape right beats preserving
+  a shape you already regret.
+- **What still needs asking is whether to build the migration** — not whether to break. Do not write
+  `async_migrate_entry`, rewrite registry entries, or bump `VERSION` / `MINOR_VERSION` on your own initiative. Put
+  the choice to the developer: break cleanly now, or carry the migration.
+- **Recommend.** "The cleanest fix is to rename the key and let existing test entries be recreated; a migration would
+  cost ~40 lines we would then maintain" is the useful form. Not "shall I migrate?"
+- **Do not record each one in `DECISIONS.md`.** That log is for architecture. A key renamed before the first stable
+  release is not an architectural decision, and a log padded with them is one nobody reads.
+- **Keep the `BREAKING CHANGE:` footer anyway.** It costs one line, and it is the whole price of this freedom: HACS
+  installs `0.x` versions too, and the people testing early deserve a changelog entry rather than a silent surprise.
+  Release-please turns it into a minor bump pre-1.0 ([`ha-release`](../ha-release/SKILL.md)), so it is cheap.
+
+This is also the window in which unique IDs stop being free. `{entry_id}_{key}` is the documented last resort — if the
+device exposes a serial or MAC, switch to it **before** 1.0.0, because afterwards it is a migration
+([`blueprint.entities`](../../instructions/blueprint.entities.instructions.md)).
+
+After 1.0.0, everything below applies as written.
 
 ## 1. Recognise it
 
@@ -32,7 +58,12 @@ Treat as breaking:
 - Removing an entity, a platform, or a device.
 
 Long-term statistics deserve special care: changing `state_class`, the unit, or the entity ID discards or corrupts
-history that cannot be recovered.
+history that cannot be recovered. One case is recoverable — when only the **spelling** of a unit changes (`"KWh"` to
+`UnitOfEnergy.KILO_WATT_HOUR`), declare the pair equivalent with `recorder.async_custom_equivalent_units` instead of
+letting the statistics break.
+
+`supported_features`, `device_class` and capability attributes are changeable at runtime, but every change forces
+voice-assistant integrations to resynchronise with their cloud service — treat a change at poll rate as a bug.
 
 ## 2. Warn before you implement
 
@@ -48,7 +79,9 @@ Wait for an explicit answer. A prior approval for one breaking change is not app
 Never do without explicit approval: removing config options, changing action parameters, changing how entry data is
 stored, renaming entities or changing device classes, or changing unique ID generation.
 
-## 3. Prefer a migration over a break
+## 3. Prefer a migration over a break — after 1.0.0
+
+Before 1.0.0 this section is an option to offer, not the default to reach for; see the threshold above.
 
 ### Unique ID migration
 
@@ -127,12 +160,22 @@ async_create_issue(
 
 ## 6. Removing entities and devices
 
-Removing an entity leaves an orphaned registry entry showing as "restored". Clean up explicitly:
+Removing an entity does not remove its registry entry, and **the entity registry writes an `unavailable` state for
+every registered entity that no longer has an entity object behind it** — so the entity lingers in the UI forever.
+Clean up explicitly:
+
+The registry cascades downward: config entry → device → entity. Removing a device removes its entities with it, which
+is why `stale-devices` needs no per-entity cleanup.
 
 - Entities: `er.async_get(hass).async_remove(entity_id)` during setup for the IDs you know are gone.
 - Devices: remove devices that no longer exist upstream (`stale-devices`, Gold), scoped to the owning config entry —
   see [`ha-modern-apis`](../ha-modern-apis/SKILL.md).
-- Implement `async_remove_config_entry_device()` so users can delete a stale device from the UI themselves.
+- Implement `async_remove_config_entry_device()` so users can delete a stale device from the UI themselves. It
+  returns `True` when the device's identifier is no longer in the coordinator's data.
+
+Entity names and entity IDs are generated from the **backend language at the moment the entity is created**, not the
+user's current UI language. Fixing wording in `en.json` therefore does not rename anyone's existing entities, and an
+entity ID created under another backend language cannot be assumed to match the English one.
 
 ## Do not
 
