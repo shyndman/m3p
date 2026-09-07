@@ -1,9 +1,16 @@
 ---
+name: "Service Action Implementation"
+description: "Registration in async_setup(), schemas, exceptions, and response data"
 applyTo: "custom_components/**/service_actions/**/*.py"
-globs: "custom_components/**/service_actions/**/*.py"
+paths:
+  - "custom_components/**/service_actions/**/*.py"
 ---
 
 # Service Actions Instructions
+
+**Procedure:** [`ha-service-action`](../skills/ha-service-action/SKILL.md) — load it before adding, changing or
+removing an action. This file is the rule set; the skill is the order of operations and the design decisions, and it
+covers the `services.yaml` half of the change too.
 
 **Applies to:** Service action implementation files
 
@@ -11,7 +18,7 @@ globs: "custom_components/**/service_actions/**/*.py"
 
 ## Critical Rules
 
-**Registration location (Silver Quality Scale requirement):**
+**Registration location (Bronze Quality Scale requirement `action-setup`):**
 
 - ✅ Register service actions in `async_setup()` (component level)
 - ❌ Never register in `async_setup_entry()` (per config entry)
@@ -52,6 +59,10 @@ SERVICE_SCHEMA = vol.Schema({
 - `HomeAssistantError` - Device/communication errors (full stack trace in logs)
 
 Both exceptions support translation keys for localization.
+
+**Authentication failures need `entry.async_start_reauth(hass)`.** `ConfigEntryAuthFailed` only triggers the reauth
+flow when it is raised from `async_setup_entry` in `__init__.py` or from the coordinator. Raised in an action handler
+it does nothing but log, so start the flow explicitly and raise a translated `HomeAssistantError` for the caller.
 
 ## Target Field
 
@@ -119,20 +130,7 @@ service.async_register_platform_entity_service(
 )
 ```
 
-Alternative with custom handler function:
-
-```python
-async def custom_handler(entity, service_call):
-    """Custom handler logic."""
-    await entity.set_sleep_timer(service_call.data['sleep_time'])
-
-service.async_register_platform_entity_service(
-    hass, DOMAIN, "set_timer",
-    entity_domain="media_player",
-    schema={vol.Required("sleep_time"): cv.time_period},
-    func=custom_handler,  # Function instead of method name
-)
-```
+`func` takes either the name of a method on the entity class, as above, or a callable `(entity, service_call)`.
 
 ## Service Icons
 
