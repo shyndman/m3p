@@ -29,7 +29,7 @@ For a diff review: `git diff main...HEAD --stat`, then read the changed files in
 ## 1. Automated gates (always first)
 
 ```bash
-script/lint          # ruff format+fix, shfmt, prettier/markdownlint, yamllint, shellcheck
+script/lint          # ruff format+fix, shfmt, prettier/markdownlint, yamllint, zizmor, shellcheck
 script/type-check    # pyright — never auto-fixed
 script/hassfest      # manifest, services.yaml, translations, integration structure
 script/test --cov-html
@@ -40,13 +40,22 @@ auto-heals formatting, so only its **remaining** output counts.
 
 ## 2. Architecture
 
-- Layering is Entity → Coordinator → API client. Any entity importing `api/` directly, or any coordinator holding HTTP
+- Layering is Entity → Coordinator → source. Any entity importing `api/` directly, or any coordinator holding HTTP
   details, is a finding.
 - Package structure matches the fixed set (`api/`, `coordinator/`, `config_flow_handler/`, `entity/`, `entity_utils/`,
   `<platform>/`, `service_actions/`, `utils/`). A `helpers/`, `common/`, `shared/`, or `lib/` package is a finding.
 - Files are 200–400 lines, one entity class per file.
 - Runtime state lives in `entry.runtime_data`, never `hass.data[DOMAIN]`.
 - No circular imports; `TYPE_CHECKING` guards for type-only imports.
+
+**Two upstream requirements this project deliberately does not meet.** Neither is a finding here, and both should be
+stated as decisions rather than silently passed over:
+
+- Core requires all device or service communication to be wrapped in a PyPI library. As a custom integration this
+  project allows an in-repo client (`AGENTS.md` § Custom Integration Flexibility) — with the consequence that the
+  client would have to be extracted before this could ever be submitted to Core.
+- `creating_component_code_review.md` still recommends `hass.data[DOMAIN]`. That page is out of date and is
+  contradicted by the Bronze `runtime-data` rule. Do not "correct" `entry.runtime_data` back to it.
 
 ## 3. Quality scale audit
 
@@ -69,10 +78,14 @@ The rules most often missed in this codebase's shape:
 
 ## 4. Code quality
 
+| File                                                               | When to read                                                                                                                            |
+| ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| [`references/core-lint-checks.md`](references/core-lint-checks.md) | Any review of integration code. The integration-specific checks Home Assistant Core lints in its own CI and this repository cannot run. |
+
 Look for the failure modes linters miss:
 
 - **Typing** — full annotations, `-> None` on procedures, no bare `Any` where a `TypedDict` or dataclass is meant,
-  `from __future__ import annotations` at the top.
+  no `from __future__ import annotations` (banned on Python 3.14).
 - **Async** — no blocking I/O in the event loop (`requests`, `open()`, `time.sleep`, sync SDK calls); every network call
   has a timeout; `asyncio.timeout` rather than a deprecated helper.
 - **Exceptions** — specific types, never bare `except:`; `raise ... from err` to preserve the chain; the coordinator
@@ -83,7 +96,10 @@ Look for the failure modes linters miss:
 
 ## 5. Security
 
-- Credentials only in `entry.data`, never in `entry.options`, the entry title, logs, or diagnostics.
+- Credentials only in `entry.data`, never in `entry.options`, the entry title, logs, or diagnostics. Separately from
+  that security rule, `config-flow` requires the whole split to be right: everything needed to establish the
+  connection belongs in `entry.data`, everything else in `entry.options`. A host stored in `options` passes the
+  credential check and still fails the rule.
 - `diagnostics.py` runs everything through `async_redact_data()` with a `TO_REDACT` set that actually covers the
   payload — re-check it whenever the API response shape changes.
 - TLS verification is never disabled, and no secret has a default value in a schema.
@@ -102,6 +118,11 @@ Look for the failure modes linters miss:
 - Entity names read well in the UI with `has_entity_name` (no repeated device name).
 - Units, device classes, and state classes are set so history and statistics work.
 - Failures surface as repair issues or reauth flows rather than silent unavailability.
+- For an integration that depends on a remote endpoint, consider `system_health.py`: a `@callback async_register`
+  that calls `register.async_register_info(...)`, whose info callback returns a dict whose values may be coroutines
+  (the frontend shows a spinner and resolves them). `system_health.async_check_can_reach_url(hass, ENDPOINT)` covers
+  the common case, and every key needs a `system_health.info.<key>` translation. It turns "it is broken" into
+  "the API is unreachable" on the user's own system page.
 
 ## 8. Documentation and release hygiene
 

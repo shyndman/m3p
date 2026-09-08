@@ -20,17 +20,27 @@ permanent.
 
 **Read [`blueprint.config_flow.instructions.md`](../../instructions/blueprint.config_flow.instructions.md)
 first.** It is the authoritative rule set: data-vs-options, reserved step names, acceptable unique IDs and their
-normalisation, the MUST/NEVER lists for user, discovery, reauth, reconfigure and subentry flows, title placeholders,
-and the migration contract. Copilot injects it automatically when you edit a config flow file; other agents must open
-it. This skill is the order of operations and the decisions.
+normalisation, schema hygiene, title placeholders, and the migration contract. Copilot injects it automatically when
+you edit a config flow file; other agents must open it. This skill is the order of operations and the decisions; the
+MUST/NEVER list for each individual flow is in the first reference below.
+
+| File                                                                   | When to read                                                                    |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| [`references/flow-types.md`](references/flow-types.md)                 | Implementing one flow — user, discovery, reauth, reconfigure, options, subentry |
+| [`references/discovery-matchers.md`](references/discovery-matchers.md) | Writing a `manifest.json` discovery matcher, or using a discovery helper API    |
+| [`references/oauth2.md`](references/oauth2.md)                         | The service authenticates with OAuth2 rather than an API key or a password      |
 
 ## Package layout
+
+Where each piece goes. Only the first four exist from the start; create the rest when something needs them, rather
+than leaving empty scaffolding behind.
 
 ```text
 config_flow_handler/
 ├── __init__.py          # exports
 ├── config_flow.py       # user, reauth, reauth_confirm, reconfigure, discovery steps
 ├── options_flow.py      # post-setup options
+├── handler.py           # logic shared between the flows above
 ├── subentry_flow.py     # multi-device / multi-account subentries
 ├── schemas/
 │   ├── config.py        # voluptuous schemas for setup steps
@@ -54,13 +64,17 @@ The top-level `config_flow.py` is a thin shim Home Assistant discovers — leave
 
 ## Adding discovery
 
-1. Add the matcher to `manifest.json`:
+1. Add the matcher to `manifest.json` — read
+   [`references/discovery-matchers.md`](references/discovery-matchers.md) first, because each protocol has a rule
+   that fails silently when you guess (lowercase-only zeroconf properties, DHCP MACs arriving without separators,
+   VID/PID pairs shared by hundreds of devices):
 
    ```json
    "zeroconf": [{ "type": "_myservice._tcp.local.", "name": "blueprint*" }]
    ```
 
-2. Implement the matching `async_step_<method>()` following the discovery MUST/NEVER list in the instructions.
+2. Implement the matching `async_step_<method>()` following the discovery MUST/NEVER list in
+   [`references/flow-types.md`](references/flow-types.md).
 3. Decide what the discovery payload gives you as a stable unique ID. If it offers nothing stable, stop and discuss it
    — do not fall back to the IP address.
 4. Confirm the flow end-to-end in the UI: the card shows a useful name, a second discovery of the same device aborts,
@@ -96,11 +110,30 @@ script/hassfest          # cross-checks every step/error/abort key against trans
 script/test
 ```
 
-Then restart Home Assistant and **walk every flow you touched in the UI** — add, reconfigure, options, and, by
-invalidating the credential, reauth. hassfest proves the translation keys exist; only the UI proves the flow is usable.
-A flow that passes CI and dead-ends on the second step is the normal failure here.
+Then restart Home Assistant and **walk every flow you touched** — add, reconfigure, options, and, by invalidating the
+credential, reauth. hassfest proves the translation keys exist; only walking the flow proves it is usable. A flow that
+passes CI and dead-ends on the second step is the normal failure here.
+
+Walk it from the terminal first — it is faster, it is repeatable, and it shows the serialised schema Home Assistant
+actually built, which is where defaults and selectors go wrong:
+
+```bash
+script/ha flow start                              # or --reconfigure
+script/ha flow step <flow_id> host=192.0.2.10 username=admin password=secret
+script/ha flow options                            # then step through it the same way
+script/ha entries                                 # the entry exists and loaded
+```
+
+Each step prints its `step_id`, any `errors`, and every field with its type and default. Full reference:
+[`references/ha-cli.md`](../blueprint-tooling/references/ha-cli.md).
+
+Two things only the browser can confirm, so finish there: that the translated labels and `data_description` hints read
+correctly, and that the form renders the way the selectors promise.
 
 ## Do not
 
 - Do not do blocking I/O or long retries inside a flow step; validate with a short timeout.
-- Do not call the flow done before walking it in the UI.
+- Do not call the flow done before walking it end to end.
+- Do not give an optional free-text field `default=None` — voluptuous injects that default when the field is left
+  empty and the selector then rejects it, making the form unsubmittable. Carry the current value in
+  `description={"suggested_value": ...}` instead.

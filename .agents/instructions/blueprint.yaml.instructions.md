@@ -1,6 +1,10 @@
 ---
+name: "YAML Files"
+description: "Formatting rules, HA conventions, and yamllint validation"
 applyTo: "**/*.yaml, **/*.yml"
-globs: "**/*.yaml, **/*.yml"
+paths:
+  - "**/*.yaml"
+  - "**/*.yml"
 ---
 
 # YAML Instructions
@@ -9,18 +13,7 @@ globs: "**/*.yaml, **/*.yml"
 
 ## Formatting Standards
 
-- **2 spaces** for indentation (never tabs)
-- No trailing whitespace
-- End files with a single newline
-- Use lowercase for keys (except where case matters)
-- Prefer `>` for multi-line strings (folded) over inline strings
-- Use `|` when preserving newlines is important
-
-## Project-Specific Rules
-
-- Keep files focused and readable
-- Use comments to separate logical sections
-- Group related configuration together
+2 spaces, never tabs. Prefer `>` for folded multi-line strings, `|` where the newlines matter.
 
 ## Schema Validation
 
@@ -40,12 +33,18 @@ Consult the relevant schema when editing YAML files to ensure correct structure.
 
 ## Validation
 
-Run `script/yaml-check` after editing YAML files. yamllint has no auto-fix mode — all
+Run `script/yaml-check` after editing YAML files. Neither tool auto-fixes here — all
 errors require manual fixes.
 
 ```bash
-script/yaml-check   # yamllint against integration YAML, schemas, .github/
+script/yaml-check   # yamllint against integration YAML, schemas, .github/;
+                    # zizmor --pedantic against .github/workflows/
 ```
+
+GitHub Actions workflows carry extra rules zizmor enforces: pin every `uses:` to a commit SHA with the version in a
+trailing comment, give the workflow a `permissions:` block and every job the narrowest one it needs with a trailing
+comment saying why, set `concurrency:`, and pass `persist-credentials: false` to `actions/checkout` unless the job
+pushes with those credentials.
 
 Configuration: `.yamllint.yml` at the project root. Key rules:
 
